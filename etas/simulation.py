@@ -21,6 +21,7 @@ import pandas as pd
 from scipy.special import gamma as gamma_func
 from scipy.special import gammainccinv
 from shapely.geometry import Polygon
+from seismostats.seismicity.catalog import ForecastCatalog
 
 from etas.inversion import (ETASParameterCalculation, branching_ratio,
                             expected_aftershocks, haversine,
@@ -1004,12 +1005,11 @@ class ETASSimulation:
     def simulate_to_df(self, forecast_n_days: int,
                        n_simulations: int, m_threshold: float = None,
                        chunksize: int = 100, info_cols: list = []) \
-            -> pd.DataFrame:
+            -> ForecastCatalog:
         store = pd.DataFrame()
         for chunk in self.simulate(forecast_n_days,
                                    n_simulations,
                                    m_threshold,
                                    chunksize, info_cols):
             store = pd.concat([store, chunk], ignore_index=False)
-
-        return store
+        return ForecastCatalog(data=store)

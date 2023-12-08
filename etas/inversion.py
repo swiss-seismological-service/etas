@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#i!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 ##############################################################################
@@ -660,6 +660,7 @@ class ETASParameterCalculation:
         self.n_hat = None
         self.i_hat = None
         self.i = metadata.get('n_iterations')
+        print(15)
 
     @classmethod
     def load_calculation(cls, metadata: dict):
