@@ -18,6 +18,7 @@ import pprint
 import uuid
 
 import geopandas as gpd
+import numba
 import numpy as np
 import pandas as pd
 import pyproj
@@ -410,19 +411,19 @@ def expected_aftershocks(event, params, no_start=False, no_end=False):
         if tau == np.inf:
             time_factor = np.power(c, -omega) / omega
         else:
-            time_fraction = upper_gamma_ext(-omega, c / tau)
+            time_fraction = jitted_upper_gamma_ext(-omega, c / tau)
     else:
         if tau == np.inf:
             time_factor = np.power(event_time_to_start + c, -omega) / omega
         else:
-            time_fraction = upper_gamma_ext(-omega,
-                                            (event_time_to_start + c) / tau)
+            time_fraction = jitted_upper_gamma_ext(-omega,
+                                                   (event_time_to_start + c) / tau)
     if not no_end:
         if tau == np.inf:
             time_factor = time_factor - \
                 np.power(event_time_to_end + c, -omega) / omega
         else:
-            time_fraction = time_fraction - upper_gamma_ext(
+            time_fraction = time_fraction - jitted_upper_gamma_ext(
                 -omega, (event_time_to_end + c) / tau
             )
 
@@ -432,6 +433,65 @@ def expected_aftershocks(event, params, no_start=False, no_end=False):
     return number_factor * area_factor * time_factor
 
 
+# warning: changed the signature
+@numba.njit(parallel=True)
+def jitted_expected_aftershocks(event_magnitude: np.ndarray,
+                                event_time_to_start: np.ndarray,
+                                event_time_to_end: np.ndarray,
+                                theta, mc):
+    """
+    changed signature from expected_after_shocks
+
+    Notes
+    - need to pass arrays, pandas series won't work for njit (use to_numpy())
+    - types must be uniform
+        - e.g. no event that depends on the parameters no_start and no_end
+          here we just implement the case no_start=False and no_end=False
+        - time_factor can't be a scalar first and then assigned an array
+    - jitted_upper_gamma_ext could not be called with array arguments
+      manually looped
+      OR we could use numba.vectorize to make it a ufunc
+    """
+
+    log10_k0, a, log10_c, omega, log10_tau, log10_d, gamma, rho = theta
+    k0 = np.power(10, log10_k0)
+    c = np.power(10, log10_c)
+    tau = np.power(10, log10_tau)
+    d = np.power(10, log10_d)
+
+    number_factor = k0 * np.exp(a * (event_magnitude - mc))
+    area_factor = (
+        np.pi * np.power(d * np.exp(gamma
+                         * (event_magnitude - mc)), -1 * rho) / rho
+    )
+    # already define as an array
+    time_factor = np.full_like(event_time_to_start, np.exp(
+        c / tau) * np.power(tau, - omega))
+    time_fraction = np.empty_like(event_time_to_start)
+
+    if tau == np.inf:
+        time_factor = np.power(event_time_to_start + c, -omega) / omega - \
+            np.power(event_time_to_end + c, -omega) / omega
+    else:
+        # Does not work with numba for array aguments
+        # mos = np.full_like(event_time_to_start, -omega)
+        # time_fraction = jitted_upper_gamma_ext(mos, (event_time_to_start + c) / tau)
+        # for i in range(time_fraction.size):
+        #     time_fraction[i] = jitted_upper_gamma_ext(
+        #         -omega, (event_time_to_start[i] + c) / tau) - \
+        #         jitted_upper_gamma_ext(-omega,
+        #
+        # (event_time_to_end[i] + c) / tau)
+        os = np.full_like(event_time_to_start, omega)
+        time_fraction = ufunc_upper_gamma_ext(-os, (event_time_to_start + c) / tau) - \
+            ufunc_upper_gamma_ext(-os, (event_time_to_end + c) / tau)
+
+        time_factor = time_factor * time_fraction
+
+    return number_factor * area_factor * time_factor
+
+
+@numba.vectorize([numba.float64(numba.float64, numba.float64)], nopython=True)
 def ll_aftershock_term(l_hat, g):
     mask = g != 0
     term = -1 * gammaln(l_hat + 1) - g
@@ -453,46 +513,74 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
     tau = np.power(10, log10_tau)
     d = np.power(10, log10_d)
 
-    source_events["G"] = expected_aftershocks(
-        [
-            source_events["source_magnitude"],
-            source_events["pos_source_to_start_time_distance"],
-            source_events["source_to_end_time_distance"],
-        ],
-        [theta, mc_min],
+    source_events["G"] = jitted_expected_aftershocks(
+        source_events["source_magnitude"].to_numpy(),
+        source_events["pos_source_to_start_time_distance"].to_numpy(),
+        source_events["source_to_end_time_distance"].to_numpy(),
+        theta, mc_min,
     )
 
     aftershock_term = ll_aftershock_term(
-        source_events["l_hat"],
-        source_events["G"],
+        source_events["l_hat"].to_numpy(),
+        source_events["G"].to_numpy(),
     ).sum()
 
-    # space time distribution term
-    Pij["likelihood_term"] = (
-        (
-            omega * np.log(tau)
-            - np.log(upper_gamma_ext(-omega, c / tau))
-            + np.log(rho)
-            + rho * np.log(d * np.exp(gamma
-                           * (Pij["source_magnitude"] - mc_min)))
-        )
-        - (
-            (1 + rho)
-            * np.log(
-                Pij["spatial_distance_squared"]
-                + (d * np.exp(gamma * (Pij["source_magnitude"] - mc_min)))
-            )
-        )
-        - (1 + omega) * np.log(Pij["time_distance"] + c)
-        - (Pij["time_distance"] + c) / tau
-        - np.log(np.pi)
-    )
+    # # space time distribution term
+    Pij["likelihood_term"] = calculate_likelihood_term(
+        Pij["source_magnitude"].to_numpy(),
+        Pij["spatial_distance_squared"].to_numpy(),
+        Pij["time_distance"].to_numpy(),
+        mc_min, omega, gamma, rho, c, tau, d)
+
     distribution_term = Pij["Pij"].mul(
         Pij["zeta_plus_1"]).mul(Pij["likelihood_term"]).sum()
 
     total = aftershock_term + distribution_term
-
     return -1 * total
+
+
+@numba.njit
+def jitted_upper_gamma_ext(a, x):
+    if a > 0:
+        return gammaincc(a, x) * gamma_func(a)
+    elif a == 0:
+        return exp1(x)
+    else:
+        return (jitted_upper_gamma_ext(a + 1, x) - np.power(x, a) * np.exp(-x)) / a
+
+
+@numba.vectorize([numba.float64(numba.float64, numba.float64)],
+                 nopython=True)
+def ufunc_upper_gamma_ext(a, x):
+    if a > 0:
+        return gammaincc(a, x) * gamma_func(a)
+    elif a == 0:
+        return exp1(x)
+    else:
+        return (jitted_upper_gamma_ext(a + 1, x) - np.power(x, a) * np.exp(-x)) / a
+
+
+@numba.njit(parallel=True)
+def calculate_likelihood_term(source_magnitude, spatial_distance_squared, time_distance, mc_min, omega, gamma, rho, c, tau, d):
+    return (
+        (
+            omega * np.log(tau)
+            - np.log(jitted_upper_gamma_ext(-omega, c / tau))
+            + np.log(rho)
+            + rho * np.log(d * np.exp(gamma
+                                      * (source_magnitude - mc_min)))
+        )
+        - (
+            (1 + rho)
+            * np.log(
+                spatial_distance_squared
+                + (d * np.exp(gamma * (source_magnitude - mc_min)))
+            )
+        )
+        - (1 + omega) * np.log(time_distance + c)
+        - (time_distance + c) / tau
+        - np.log(np.pi)
+    )
 
 
 def expected_aftershocks_free_prod(event, params, no_start=False, no_end=False):
