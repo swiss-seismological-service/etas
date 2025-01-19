@@ -1044,7 +1044,12 @@ class ETASSimulation:
         approx_times: bool = False,
         m_max: float = None,
         induced_info: list = None,
+        parallel: int | None = None,
     ):
+        """
+        Args:
+            parallel: if not None then simulation uses n=parallel cores.
+        """
         self.logger = logging.getLogger(__name__)
 
         self.inversion_params = inversion_params
@@ -1091,6 +1096,7 @@ class ETASSimulation:
                 self.induced_bslo,
                 self.n_induced,
             ) = [None, None, None, None, None, None]
+        self.parallel = parallel
 
         self.logger.debug(
             "using parameters calculated on {}\n".format(
@@ -1168,7 +1174,6 @@ class ETASSimulation:
         chunksize: int = 100,
         info_cols: list = ["is_background"],
         i_start: int = 0,
-        parallel: bool = True,
     ) -> Generator[pd.DataFrame, None, None]:
         """
         Simulates catalog continuations n_simulations times.
@@ -1178,8 +1183,8 @@ class ETASSimulation:
         Yields:
             catalogs containing events from at most chunksize simulations.
         """
-        if parallel:
-            workers = os.cpu_count()
+        if self.parallel is not None and self.parallel > 1:
+            workers = self.parallel
             with ProcessPoolExecutor(max_workers=workers) as executor:
                 # split up simulations into chunks of size at most chunksize
                 current_simulation_id = i_start
