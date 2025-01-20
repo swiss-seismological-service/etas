@@ -1184,7 +1184,9 @@ class ETASSimulation:
             catalogs containing events from at most chunksize simulations.
         """
         if self.parallel is not None and self.parallel > 1:
-            workers = self.parallel
+            workers = int(self.parallel)
+            self.logger.debug(
+                "simulating in parallel using {} workers".format(workers))
             with ProcessPoolExecutor(max_workers=workers) as executor:
                 # split up simulations into chunks of size at most chunksize
                 current_simulation_id = i_start
@@ -1196,9 +1198,39 @@ class ETASSimulation:
                     simulation_start_ids.append(current_simulation_id)
                     current_simulation_id += current_chunk
                     n_simulations -= current_chunk
+                needed_params = {
+                    "m_ref": self.inversion_params.m_ref,
+                    "timewindow_end": self.inversion_params.timewindow_end,
+                    "auxiliary_start": self.inversion_params.auxiliary_start,
+                    "theta": self.inversion_params.theta,
+                    "delta_m": self.inversion_params.delta_m,
+                    "beta": self.inversion_params.beta,
+                }
                 simulate_chunk = functools.partial(
-                    self._simulate_chunk,
+                    _simulate_chunk,
                     forecast_n_days=forecast_n_days,
+                    logger=self.logger,
+                    induced=self.induced,
+                    needed_params=needed_params.copy(),
+                    background_lats=self.background_lats,
+                    background_lons=self.background_lons,
+                    background_probs=self.background_probs,
+                    bg_grid=self.bg_grid,
+                    bsla=self.bsla,
+                    bslo=self.bslo,
+                    gaussian_scale=self.gaussian_scale,
+                    approx_times=self.approx_times,
+                    mfd_zones=self.mfd_zones,
+                    zones_from_latlon=self.zones_from_latlon,
+                    induced_lats=self.induced_lats,
+                    induced_lons=self.induced_lons,
+                    induced_term=self.induced_term,
+                    induced_bsla=self.induced_bsla,
+                    induced_bslo=self.induced_bslo,
+                    n_induced=self.n_induced,
+                    polygon=self.polygon,
+                    catalog=self.catalog,
+                    m_max=self.m_max,
                     m_threshold=m_threshold,
                     filter_polygon=filter_polygon,
                     info_cols=info_cols,
@@ -1400,120 +1432,149 @@ class ETASSimulation:
         store = pd.concat(chunks, ignore_index=False)
         return ForecastCatalog(data=store)
 
-    def _simulate_chunk(
-        self,
-        n_simulations: int,
-        i_start: int,
-        forecast_n_days: int,
-        m_threshold: float | None = None,
-        filter_polygon: bool = True,
-        info_cols: list = ["is_background"],
-    ) -> pd.DataFrame:
-        """
-        Simulates n_simulations continuations.
-        The simulation ids are:
-        i_start, i_start + 1, ..., i_start + n_simulations - 1.
 
-        Args:
-            n_simulations: number of simulations to perform
-            i_start: starting index for simulation ids
-            forecast_n_days: number of days to simulate
-            m_threshold: minimum magnitude threshold
-            filter_polygon: whether to filter the resulting DataFrame
-            info_cols: additional columns to include in the resulting DataFrame
+def _simulate_chunk(
+    n_simulations: int,
+    i_start: int,
+    forecast_n_days: int,
+    logger,
+    induced,
+    needed_params,
+    background_lats,
+    background_lons,
+    background_probs,
+    bg_grid,
+    bsla,
+    bslo,
+    gaussian_scale,
+    approx_times,
+    mfd_zones,
+    zones_from_latlon,
+    induced_lats,
+    induced_lons,
+    induced_term,
+    induced_bsla,
+    induced_bslo,
+    n_induced,
+    polygon,
+    catalog,
+    m_max,
+    m_threshold: float | None = None,
+    filter_polygon: bool = True,
+    info_cols: list = ["is_background"],
 
-        Returns:
-              simulations: the concatenated DataFrame of all simulations
-        """
-        # NOTE: this method is used in the parallel implementation
-        # and is based on the simulate method
-        # here we filter after simulating the entire chunk
-        start = dt.datetime.now()
-        np.random.seed()
-        logger.debug("induced info: {}".format(self.induced))
+) -> pd.DataFrame:
+    """
+    Simulates n_simulations continuations.
+    The simulation ids are:
+    i_start, i_start + 1, ..., i_start + n_simulations - 1.
 
-        if m_threshold is None:
-            m_threshold = self.inversion_params.m_ref
+    Args:
+        n_simulations: number of simulations to perform
+        i_start: starting index for simulation ids
+        forecast_n_days: number of days to simulate
 
-        # columns returned in resulting DataFrame
-        cols = ["latitude", "longitude", "magnitude", "time"] + info_cols
-        if n_simulations != 1:
-            cols.append("catalog_id")
+    Note:
+    this method is used in the parallel implementation
+    and is based on the simulate method.
+    Here we filter after simulating the entire chunk.
+    As a small optimization, this is a separate function
+    instead of a method of ETASSimulation to avoid pickling
+    the entire self object to pass to the subprocesses.
+    Also needed_params is a dict which partially contains
+    inversion_parameters data.
 
-        # end of training period is start of forecasting period
-        self.forecast_start_date = self.inversion_params.timewindow_end
-        self.forecast_end_date = self.forecast_start_date + dt.timedelta(
-            days=forecast_n_days
+    Returns:
+            simulations: the concatenated DataFrame of all simulations
+    """
+
+    start = dt.datetime.now()
+    np.random.seed()
+    logger.debug("induced info: {}".format(induced))
+
+    if m_threshold is None:
+        m_threshold = needed_params["m_ref"]
+
+    # columns returned in resulting DataFrame
+    cols = ["latitude", "longitude", "magnitude", "time"] + info_cols
+    if n_simulations != 1:
+        cols.append("catalog_id")
+
+    # end of training period is start of forecasting period
+
+    forecast_start_date = needed_params["timewindow_end"]
+    forecast_end_date = forecast_start_date + dt.timedelta(
+        days=forecast_n_days
+    )
+
+    continuations = []
+    for sim_id in range(i_start, i_start + n_simulations):
+        continuation = simulate_catalog_continuation(
+            catalog,
+            auxiliary_start=needed_params["auxiliary_start"],
+            auxiliary_end=forecast_start_date,
+            polygon=polygon,
+            simulation_end=forecast_end_date,
+            parameters=needed_params["theta"],
+            mc=needed_params["m_ref"] - needed_params["delta_m"] / 2,
+            m_max=(
+                m_max + needed_params["delta_m"] / 2
+                if m_max is not None
+                else None
+            ),
+            beta_main=needed_params["beta"],
+            background_lats=background_lats,
+            background_lons=background_lons,
+            background_probs=background_probs,
+            bg_grid=bg_grid,
+            bsla=bsla,
+            bslo=bslo,
+            gaussian_scale=gaussian_scale,
+            filter_polygon=False,
+            approx_times=approx_times,
+            mfd_zones=mfd_zones,
+            zones_from_latlon=zones_from_latlon,
+            induced_lats=induced_lats,
+            induced_lons=induced_lons,
+            induced_term=induced_term,
+            induced_bsla=induced_bsla,
+            induced_bslo=induced_bslo,
+            n_induced=n_induced,
         )
 
-        continuations = []
-        for sim_id in range(i_start, i_start + n_simulations):
-            continuation = simulate_catalog_continuation(
-                self.catalog,
-                auxiliary_start=self.inversion_params.auxiliary_start,
-                auxiliary_end=self.forecast_start_date,
-                polygon=self.polygon,
-                simulation_end=self.forecast_end_date,
-                parameters=self.inversion_params.theta,
-                mc=self.inversion_params.m_ref - self.inversion_params.delta_m / 2,
-                m_max=(
-                    self.m_max + self.inversion_params.delta_m / 2
-                    if self.m_max is not None
-                    else None
-                ),
-                beta_main=self.inversion_params.beta,
-                background_lats=self.background_lats,
-                background_lons=self.background_lons,
-                background_probs=self.background_probs,
-                bg_grid=self.bg_grid,
-                bsla=self.bsla,
-                bslo=self.bslo,
-                gaussian_scale=self.gaussian_scale,
-                filter_polygon=False,
-                approx_times=self.approx_times,
-                mfd_zones=self.mfd_zones,
-                zones_from_latlon=self.zones_from_latlon,
-                induced_lats=self.induced_lats,
-                induced_lons=self.induced_lons,
-                induced_term=self.induced_term,
-                induced_bsla=self.induced_bsla,
-                induced_bslo=self.induced_bslo,
-                n_induced=self.n_induced,
-            )
+        continuation["catalog_id"] = sim_id
+        continuations.append(continuation)
 
-            continuation["catalog_id"] = sim_id
-            continuations.append(continuation)
-
-        simulations = pd.concat(continuations, ignore_index=False)
-
-        simulations.query(
-            "time>=@self.forecast_start_date and "
-            "time<=@self.forecast_end_date and "
-            "magnitude>=@m_threshold-@self.inversion_params.delta_m/2",
-            inplace=True,
+    simulations = pd.concat(continuations, ignore_index=False)
+    delta_m = needed_params['delta_m']  # noqa: F841
+    simulations.query(
+        "time>=@forecast_start_date and "
+        "time<=@forecast_end_date and "
+        "magnitude>=@m_threshold-@delta_m/2",
+        inplace=True,
+    )
+    if needed_params["delta_m"] > 0:
+        simulations.magnitude = bin_to_precision(
+            simulations.magnitude, needed_params["delta_m"]
         )
-        if self.inversion_params.delta_m > 0:
-            simulations.magnitude = bin_to_precision(
-                simulations.magnitude, self.inversion_params.delta_m
-            )
-        simulations.index.name = "id"
-        self.logger.debug(
-            "storing simulations up to {}".format(sim_id))
-        self.logger.info(
-            f"took {dt.datetime.now() - start} to simulate "
-            f"{n_simulations} catalogs."
+    simulations.index.name = "id"
+    logger.debug(
+        "storing simulations up to {}".format(sim_id))
+    logger.info(
+        f"took {dt.datetime.now() - start} to simulate "
+        f"{n_simulations} catalogs."
+    )
+
+    # now filter polygon
+    if filter_polygon:
+        simulations = gpd.GeoDataFrame(
+            simulations,
+            geometry=gpd.points_from_xy(
+                simulations.latitude, simulations.longitude
+            ),
         )
+        simulations = simulations[simulations.intersects(
+            polygon)]
 
-        # now filter polygon
-        if filter_polygon:
-            simulations = gpd.GeoDataFrame(
-                simulations,
-                geometry=gpd.points_from_xy(
-                    simulations.latitude, simulations.longitude
-                ),
-            )
-            simulations = simulations[simulations.intersects(
-                self.polygon)]
-
-        self.logger.info("DONE simulating!")
-        return simulations[cols]
+    logger.info("DONE simulating!")
+    return simulations[cols]
