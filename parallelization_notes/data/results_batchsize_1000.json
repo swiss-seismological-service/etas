@@ -1,0 +1,47 @@
+[
+    {
+        "cores": 8,
+        "simulations": 100,
+        "execution_time": 80.173213
+    },
+    {
+        "cores": 8,
+        "simulations": 1000,
+        "execution_time": 168.148846
+    },
+    {
+        "cores": 8,
+        "simulations": 10000,
+        "execution_time": 279.395536
+    },
+    {
+        "cores": 16,
+        "simulations": 100,
+        "execution_time": 79.286118
+    },
+    {
+        "cores": 16,
+        "simulations": 1000,
+        "execution_time": 170.041373
+    },
+    {
+        "cores": 16,
+        "simulations": 10000,
+        "execution_time": 189.523182
+    },
+    {
+        "cores": 32,
+        "simulations": 100,
+        "execution_time": 79.396192
+    },
+    {
+        "cores": 32,
+        "simulations": 1000,
+        "execution_time": 168.312069
+    },
+    {
+        "cores": 32,
+        "simulations": 10000,
+        "execution_time": 192.682217
+    }
+]

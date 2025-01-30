@@ -49,7 +49,8 @@ def entrypoint_suiETAS(model_input: ModelInput) -> list[ForecastCatalog]:
     etas_parameters.invert()
 
     # Run ETAS Simulation
-    simulation = ETASSimulation(etas_parameters, m_max=7.6)
+    parallel = model_parameters.get('parallel')
+    simulation = ETASSimulation(etas_parameters, m_max=7.6, parallel=parallel)
     simulation.prepare()
 
     # prepare background grid for simulation of locations
@@ -133,7 +134,8 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     background_probs = bg_grid.total / bg_grid.total.max()
 
     # Run ETAS Simulation
-    simulation = ETASSimulation(etas_parameters, m_max=10.0)
+    parallel = model_parameters.get('parallel')
+    simulation = ETASSimulation(etas_parameters, m_max=10.0, parallel=parallel)
     simulation.bg_grid = True
     simulation.background_lats = background_lats
     simulation.background_lons = background_lons

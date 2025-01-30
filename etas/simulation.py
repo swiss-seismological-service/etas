@@ -10,11 +10,14 @@
 # Seismological Research Letters 2021; doi: https://doi.org/10.1785/0220200231
 ##############################################################################
 
+from concurrent.futures import ProcessPoolExecutor
 import datetime as dt
 import decimal
+import functools
 import logging
 import os
 import pprint
+from typing import Generator
 
 import geopandas as gpd
 import numpy as np
@@ -65,7 +68,7 @@ def inverse_upper_gamma_ext(a, y):
         from pynverse import inversefunc
         from scipy.optimize import minimize
 
-        uge = lambda x: upper_gamma_ext(a, x)
+        def uge(x): return upper_gamma_ext(a, x)
 
         # numerical inverse
         def num_inv(a, y):
@@ -119,7 +122,8 @@ def transform_parameters(par, beta, delta_m, dm_max_orig=None):
     alpha_minus_beta = par["a"] - par["rho"] * par["gamma"] - beta
 
     if dm_max_orig is not None:
-        branching_integral_orig = branching_integral(alpha_minus_beta, dm_max_orig)
+        branching_integral_orig = branching_integral(
+            alpha_minus_beta, dm_max_orig)
         branching_integral_new = branching_integral(
             alpha_minus_beta,
             (dm_max_orig - delta_m if dm_max_orig is not None else None),
@@ -170,7 +174,8 @@ def parameters_from_standard_formulation(
         here,
         beta=beta,
         delta_m=-delta_m_ref,
-        dm_max_orig=(dm_max_st - delta_m_ref if dm_max_st is not None else None),
+        dm_max_orig=(
+            dm_max_st - delta_m_ref if dm_max_st is not None else None),
     )
 
     # define parameters based on standard formulation
@@ -182,7 +187,8 @@ def parameters_from_standard_formulation(
     )
     result["omega"] = par_st["p"] - 1
     result["log10_tau"] = 12.26 if result["omega"] <= 0 else np.inf
-    result["a"] = par_st["alpha"] * np.log(10) + par_here["rho"] * par_here["gamma"]
+    result["a"] = par_st["alpha"] * \
+        np.log(10) + par_here["rho"] * par_here["gamma"]
 
     # transform back to reference magnitude of interest
     result = transform_parameters(
@@ -234,7 +240,8 @@ def simulate_aftershock_time(log10_c, omega, log10_tau, size=1):
     y = np.random.uniform(size=size)
 
     return (
-        inverse_upper_gamma_ext(-omega, (1 - y) * upper_gamma_ext(-omega, c / tau))
+        inverse_upper_gamma_ext(-omega, (1 - y)
+                                * upper_gamma_ext(-omega, c / tau))
         * tau
         - c
     )
@@ -314,19 +321,25 @@ def simulate_background_location(
 
     keep_idxs = []
     while sum(keep_idxs) == 0:
-        keep_idxs = background_probs >= np.random.uniform(size=len(background_probs))
+        keep_idxs = background_probs >= np.random.uniform(
+            size=len(background_probs))
 
     sample_lats = latitudes[keep_idxs]
     sample_lons = longitudes[keep_idxs]
 
-    choices = np.floor(np.random.uniform(0, len(sample_lats), size=n)).astype(int)
+    choices = np.floor(np.random.uniform(
+        0, len(sample_lats), size=n)).astype(int)
 
     if grid:
-        lats = sample_lats.iloc[choices] + np.random.uniform(0, bsla, size=n) - bsla / 2
-        lons = sample_lons.iloc[choices] + np.random.uniform(0, bslo, size=n) - bslo / 2
+        lats = sample_lats.iloc[choices] + \
+            np.random.uniform(0, bsla, size=n) - bsla / 2
+        lons = sample_lons.iloc[choices] + \
+            np.random.uniform(0, bslo, size=n) - bslo / 2
     else:
-        lats = sample_lats.iloc[choices] + np.random.normal(loc=0, scale=scale, size=n)
-        lons = sample_lons.iloc[choices] + np.random.normal(loc=0, scale=scale, size=n)
+        lats = sample_lats.iloc[choices] + \
+            np.random.normal(loc=0, scale=scale, size=n)
+        lons = sample_lons.iloc[choices] + \
+            np.random.normal(loc=0, scale=scale, size=n)
 
     return lats, lons
 
@@ -381,12 +394,14 @@ def generate_background_events(
     logger.info(f"  number of background events needed: {n_background}")
     if n_background == 0:
         return pd.DataFrame()
-    logger.info(f"  generating {n_generate} to throw away those outside the polygon")
+    logger.info(
+        f"  generating {n_generate} to throw away those outside the polygon")
 
     # define dataframe with background events
     catalog = pd.DataFrame(
         None,
-        columns=["latitude", "longitude", "time", "magnitude", "parent", "generation"],
+        columns=["latitude", "longitude", "time",
+                 "magnitude", "parent", "generation"],
     )
 
     # generate lat, long
@@ -402,11 +417,14 @@ def generate_background_events(
             n=n_generate,
         )
     else:
-        catalog["latitude"] = np.random.uniform(min_lat, max_lat, size=n_generate)
-        catalog["longitude"] = np.random.uniform(min_lon, max_lon, size=n_generate)
+        catalog["latitude"] = np.random.uniform(
+            min_lat, max_lat, size=n_generate)
+        catalog["longitude"] = np.random.uniform(
+            min_lon, max_lon, size=n_generate)
 
     catalog = gpd.GeoDataFrame(
-        catalog, geometry=gpd.points_from_xy(catalog.latitude, catalog.longitude)
+        catalog, geometry=gpd.points_from_xy(
+            catalog.latitude, catalog.longitude)
     )
     catalog = catalog[catalog.intersects(polygon)].head(n_background)
 
@@ -428,11 +446,14 @@ def generate_background_events(
         )
 
         # generate lat, long
-        catalog["latitude"] = np.random.uniform(min_lat, max_lat, size=n_generate)
-        catalog["longitude"] = np.random.uniform(min_lon, max_lon, size=n_generate)
+        catalog["latitude"] = np.random.uniform(
+            min_lat, max_lat, size=n_generate)
+        catalog["longitude"] = np.random.uniform(
+            min_lon, max_lon, size=n_generate)
 
         catalog = gpd.GeoDataFrame(
-            catalog, geometry=gpd.points_from_xy(catalog.latitude, catalog.longitude)
+            catalog, geometry=gpd.points_from_xy(
+                catalog.latitude, catalog.longitude)
         )
         catalog = catalog[catalog.intersects(polygon)].head(n_background)
 
@@ -471,7 +492,8 @@ def generate_background_events(
         no_end=True,
         # axis=1
     )
-    catalog["n_aftershocks"] = np.random.poisson(lam=catalog["expected_n_aftershocks"])
+    catalog["n_aftershocks"] = np.random.poisson(
+        lam=catalog["expected_n_aftershocks"])
 
     return catalog.drop("geometry", axis=1)
 
@@ -550,7 +572,8 @@ def generate_aftershocks(
         aftershocks["parent_magnitude"],
         mc=mc,
     )
-    aftershocks["angle"] = np.random.uniform(0, 2 * np.pi, size=len(aftershocks))
+    aftershocks["angle"] = np.random.uniform(
+        0, 2 * np.pi, size=len(aftershocks))
     aftershocks["degree_lon"] = haversine(
         np.radians(aftershocks["parent_latitude"]),
         np.radians(aftershocks["parent_latitude"]),
@@ -580,7 +603,8 @@ def generate_aftershocks(
     if polygon is not None:
         aftershocks = gpd.GeoDataFrame(
             aftershocks,
-            geometry=gpd.points_from_xy(aftershocks.latitude, aftershocks.longitude),
+            geometry=gpd.points_from_xy(
+                aftershocks.latitude, aftershocks.longitude),
         )
         aftershocks = aftershocks[aftershocks.intersects(polygon)]
 
@@ -610,7 +634,8 @@ def generate_aftershocks(
         no_start=True,
         no_end=True,
     )
-    aadf["n_aftershocks"] = np.random.poisson(lam=aadf["expected_n_aftershocks"])
+    aadf["n_aftershocks"] = np.random.poisson(
+        lam=aadf["expected_n_aftershocks"])
 
     return aadf
 
@@ -750,7 +775,8 @@ def generate_catalog(
         ).copy()
 
         # if no aftershocks are produced by events of this generation, stop
-        logger.info(f"  number of events with aftershocks: {len(sources.index)}")
+        logger.info(
+            f"  number of events with aftershocks: {len(sources.index)}")
 
         if len(sources.index) == 0:
             break
@@ -771,15 +797,18 @@ def generate_catalog(
 
         aftershocks.index += catalog.index.max() + 1
 
-        logger.info(f"  number of generated aftershocks: {len(aftershocks.index)}")
+        logger.info(
+            f"  number of generated aftershocks: {len(aftershocks.index)}")
 
-        catalog = pd.concat([catalog, aftershocks], ignore_index=False, sort=True)
+        catalog = pd.concat([catalog, aftershocks],
+                            ignore_index=False, sort=True)
 
         generation = generation + 1
 
     logger.info(f"\n\ntotal events simulated: {len(catalog)}")
     catalog = gpd.GeoDataFrame(
-        catalog, geometry=gpd.points_from_xy(catalog.latitude, catalog.longitude)
+        catalog, geometry=gpd.points_from_xy(
+            catalog.latitude, catalog.longitude)
     )
     catalog = catalog[catalog.intersects(polygon)]
     logger.info(f"inside the polygon: {len(catalog)}")
@@ -961,7 +990,8 @@ def simulate_catalog_continuation(
         ).copy()
 
         # if no aftershocks are produced by events of this generation, stop
-        logger.debug(f"number of events with aftershocks: {len(sources.index)}")
+        logger.debug(
+            f"number of events with aftershocks: {len(sources.index)}")
         if len(sources.index) == 0:
             break
 
@@ -991,12 +1021,14 @@ def simulate_catalog_continuation(
             f'{aftershocks["n_aftershocks"].sum()}'
         )
         aftershocks["xi_plus_1"] = 1
-        catalog = pd.concat([catalog, aftershocks], ignore_index=False, sort=True)
+        catalog = pd.concat([catalog, aftershocks],
+                            ignore_index=False, sort=True)
 
         generation = generation + 1
     if filter_polygon:
         catalog = gpd.GeoDataFrame(
-            catalog, geometry=gpd.points_from_xy(catalog.latitude, catalog.longitude)
+            catalog, geometry=gpd.points_from_xy(
+                catalog.latitude, catalog.longitude)
         )
         catalog = catalog[catalog.intersects(polygon)]
         return catalog.drop("geometry", axis=1)
@@ -1012,7 +1044,12 @@ class ETASSimulation:
         approx_times: bool = False,
         m_max: float = None,
         induced_info: list = None,
+        parallel: int | None = None,
     ):
+        """
+        Args:
+            parallel: if not None then simulation uses n=parallel cores.
+        """
         self.logger = logging.getLogger(__name__)
 
         self.inversion_params = inversion_params
@@ -1059,6 +1096,7 @@ class ETASSimulation:
                 self.induced_bslo,
                 self.n_induced,
             ) = [None, None, None, None, None, None]
+        self.parallel = parallel
 
         self.logger.debug(
             "using parameters calculated on {}\n".format(
@@ -1123,7 +1161,8 @@ class ETASSimulation:
         self.background_lats = self.target_events["latitude"]
         self.background_lons = self.target_events["longitude"]
         self.background_probs = self.target_events["P_background"] * (
-            self.target_events["zeta_plus_1"] / self.target_events["zeta_plus_1"].max()
+            self.target_events["zeta_plus_1"]
+            / self.target_events["zeta_plus_1"].max()
         )
 
     def simulate(
@@ -1135,7 +1174,75 @@ class ETASSimulation:
         chunksize: int = 100,
         info_cols: list = ["is_background"],
         i_start: int = 0,
-    ) -> None:
+    ) -> Generator[pd.DataFrame, None, None]:
+        """
+        Simulates catalog continuations n_simulations times.
+
+        The column 'catalog_id' gives the id of the simulation.
+
+        Yields:
+            catalogs containing events from at most chunksize simulations.
+        """
+        if self.parallel is not None and self.parallel > 1:
+            workers = int(self.parallel)
+            self.logger.debug(
+                "simulating in parallel using {} workers".format(workers))
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                # split up simulations into chunks of size at most chunksize
+                current_simulation_id = i_start
+                simulation_start_ids = []
+                simulation_counts = []
+                while n_simulations > 0:
+                    current_chunk = min(chunksize, n_simulations)
+                    simulation_counts.append(current_chunk)
+                    simulation_start_ids.append(current_simulation_id)
+                    current_simulation_id += current_chunk
+                    n_simulations -= current_chunk
+                needed_params = {
+                    "m_ref": self.inversion_params.m_ref,
+                    "timewindow_end": self.inversion_params.timewindow_end,
+                    "auxiliary_start": self.inversion_params.auxiliary_start,
+                    "theta": self.inversion_params.theta,
+                    "delta_m": self.inversion_params.delta_m,
+                    "beta": self.inversion_params.beta,
+                }
+                simulate_chunk = functools.partial(
+                    _simulate_chunk,
+                    forecast_n_days=forecast_n_days,
+                    logger=self.logger,
+                    induced=self.induced,
+                    needed_params=needed_params.copy(),
+                    background_lats=self.background_lats,
+                    background_lons=self.background_lons,
+                    background_probs=self.background_probs,
+                    bg_grid=self.bg_grid,
+                    bsla=self.bsla,
+                    bslo=self.bslo,
+                    gaussian_scale=self.gaussian_scale,
+                    approx_times=self.approx_times,
+                    mfd_zones=self.mfd_zones,
+                    zones_from_latlon=self.zones_from_latlon,
+                    induced_lats=self.induced_lats,
+                    induced_lons=self.induced_lons,
+                    induced_term=self.induced_term,
+                    induced_bsla=self.induced_bsla,
+                    induced_bslo=self.induced_bslo,
+                    n_induced=self.n_induced,
+                    polygon=self.polygon,
+                    catalog=self.catalog,
+                    m_max=self.m_max,
+                    m_threshold=m_threshold,
+                    filter_polygon=filter_polygon,
+                    info_cols=info_cols,
+                )
+                for simulated_chunk in executor.map(
+                    simulate_chunk,
+                    simulation_counts,
+                    simulation_start_ids,
+                ):
+                    yield simulated_chunk
+            return
+
         start = dt.datetime.now()
         np.random.seed()
         logger.debug("induced info: {}".format(self.induced))
@@ -1190,7 +1297,8 @@ class ETASSimulation:
             )
 
             continuation["catalog_id"] = sim_id
-            simulations = pd.concat([simulations, continuation], ignore_index=False)
+            simulations = pd.concat(
+                [simulations, continuation], ignore_index=False)
 
             if sim_id % chunksize == 0 or sim_id == n_simulations - 1:
                 simulations.query(
@@ -1204,7 +1312,8 @@ class ETASSimulation:
                         simulations.magnitude, self.inversion_params.delta_m
                     )
                 simulations.index.name = "id"
-                self.logger.debug("storing simulations up to {}".format(sim_id))
+                self.logger.debug(
+                    "storing simulations up to {}".format(sim_id))
                 self.logger.debug(
                     f"took {dt.datetime.now() - start} to simulate "
                     f"{sim_id + 1} catalogs."
@@ -1218,7 +1327,8 @@ class ETASSimulation:
                             simulations.latitude, simulations.longitude
                         ),
                     )
-                    simulations = simulations[simulations.intersects(self.polygon)]
+                    simulations = simulations[simulations.intersects(
+                        self.polygon)]
 
                 yield simulations[cols]
 
@@ -1265,13 +1375,15 @@ class ETASSimulation:
                     last_line = last_line.split(",")
                     last_index = int(float(last_line[cat_id_index]))
                     logger.debug(
-                        "simulations were stored until index {}".format(last_index)
+                        "simulations were stored until index {}".format(
+                            last_index)
                     )
                 else:
                     logger.info("no column 'catalog_id' in this file.")
                     last_index = -1
 
-            max_store_incomplete = ((n_simulations - 1) // chunksize) * chunksize
+            max_store_incomplete = (
+                (n_simulations - 1) // chunksize) * chunksize
             if last_index > max_store_incomplete:
                 logger.debug("all done, nothing left to do.")
                 exit()
@@ -1283,7 +1395,8 @@ class ETASSimulation:
                     chunks_done += 1
 
                 i_next = chunks_done * chunksize + 1
-                logger.debug("will continue from simulation {}.".format(i_next))
+                logger.debug(
+                    "will continue from simulation {}.".format(i_next))
 
                 generator = self.simulate(
                     forecast_n_days,
@@ -1308,14 +1421,160 @@ class ETASSimulation:
         chunksize: int = 100,
         info_cols: list = [],
     ) -> ForecastCatalog:
-        store = pd.DataFrame()
-        for chunk in self.simulate(
+        chunks = list(self.simulate(
             forecast_n_days,
             n_simulations,
             m_threshold,
             filter_polygon,
             chunksize,
             info_cols,
-        ):
-            store = pd.concat([store, chunk], ignore_index=False)
+        ))
+        store = pd.concat(chunks, ignore_index=False)
         return ForecastCatalog(data=store)
+
+
+def _simulate_chunk(
+    n_simulations: int,
+    i_start: int,
+    forecast_n_days: int,
+    logger,
+    induced,
+    needed_params,
+    background_lats,
+    background_lons,
+    background_probs,
+    bg_grid,
+    bsla,
+    bslo,
+    gaussian_scale,
+    approx_times,
+    mfd_zones,
+    zones_from_latlon,
+    induced_lats,
+    induced_lons,
+    induced_term,
+    induced_bsla,
+    induced_bslo,
+    n_induced,
+    polygon,
+    catalog,
+    m_max,
+    m_threshold: float | None = None,
+    filter_polygon: bool = True,
+    info_cols: list = ["is_background"],
+
+) -> pd.DataFrame:
+    """
+    Simulates n_simulations continuations.
+    The simulation ids are:
+    i_start, i_start + 1, ..., i_start + n_simulations - 1.
+
+    Args:
+        n_simulations: number of simulations to perform
+        i_start: starting index for simulation ids
+        forecast_n_days: number of days to simulate
+
+    Note:
+    this method is used in the parallel implementation
+    and is based on the simulate method.
+    Here we filter after simulating the entire chunk.
+    As a small optimization, this is a separate function
+    instead of a method of ETASSimulation to avoid pickling
+    the entire self object to pass to the subprocesses.
+    Also needed_params is a dict which partially contains
+    inversion_parameters data.
+
+    Returns:
+            simulations: the concatenated DataFrame of all simulations
+    """
+
+    start = dt.datetime.now()
+    np.random.seed()
+    logger.debug("induced info: {}".format(induced))
+
+    if m_threshold is None:
+        m_threshold = needed_params["m_ref"]
+
+    # columns returned in resulting DataFrame
+    cols = ["latitude", "longitude", "magnitude", "time"] + info_cols
+    if n_simulations != 1:
+        cols.append("catalog_id")
+
+    # end of training period is start of forecasting period
+
+    forecast_start_date = needed_params["timewindow_end"]
+    forecast_end_date = forecast_start_date + dt.timedelta(
+        days=forecast_n_days
+    )
+
+    continuations = []
+    for sim_id in range(i_start, i_start + n_simulations):
+        continuation = simulate_catalog_continuation(
+            catalog,
+            auxiliary_start=needed_params["auxiliary_start"],
+            auxiliary_end=forecast_start_date,
+            polygon=polygon,
+            simulation_end=forecast_end_date,
+            parameters=needed_params["theta"],
+            mc=needed_params["m_ref"] - needed_params["delta_m"] / 2,
+            m_max=(
+                m_max + needed_params["delta_m"] / 2
+                if m_max is not None
+                else None
+            ),
+            beta_main=needed_params["beta"],
+            background_lats=background_lats,
+            background_lons=background_lons,
+            background_probs=background_probs,
+            bg_grid=bg_grid,
+            bsla=bsla,
+            bslo=bslo,
+            gaussian_scale=gaussian_scale,
+            filter_polygon=False,
+            approx_times=approx_times,
+            mfd_zones=mfd_zones,
+            zones_from_latlon=zones_from_latlon,
+            induced_lats=induced_lats,
+            induced_lons=induced_lons,
+            induced_term=induced_term,
+            induced_bsla=induced_bsla,
+            induced_bslo=induced_bslo,
+            n_induced=n_induced,
+        )
+
+        continuation["catalog_id"] = sim_id
+        continuations.append(continuation)
+
+    simulations = pd.concat(continuations, ignore_index=False)
+    delta_m = needed_params['delta_m']  # noqa: F841
+    simulations.query(
+        "time>=@forecast_start_date and "
+        "time<=@forecast_end_date and "
+        "magnitude>=@m_threshold-@delta_m/2",
+        inplace=True,
+    )
+    if needed_params["delta_m"] > 0:
+        simulations.magnitude = bin_to_precision(
+            simulations.magnitude, needed_params["delta_m"]
+        )
+    simulations.index.name = "id"
+    logger.debug(
+        "storing simulations up to {}".format(sim_id))
+    logger.info(
+        f"took {dt.datetime.now() - start} to simulate "
+        f"{n_simulations} catalogs."
+    )
+
+    # now filter polygon
+    if filter_polygon:
+        simulations = gpd.GeoDataFrame(
+            simulations,
+            geometry=gpd.points_from_xy(
+                simulations.latitude, simulations.longitude
+            ),
+        )
+        simulations = simulations[simulations.intersects(
+            polygon)]
+
+    logger.info("DONE simulating!")
+    return simulations[cols]
