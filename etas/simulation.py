@@ -19,6 +19,9 @@ import pprint
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+# from line_profiler import profile
+# from pycompss.api.api import compss_wait_on
+# from pycompss.api.task import task
 from scipy.special import gamma as gamma_func
 from scipy.special import gammainccinv
 from seismostats import ForecastCatalog
@@ -342,6 +345,7 @@ def simulate_background_location(
     return lats, lons
 
 
+# @profile
 def generate_background_events(
     polygon,
     timewindow_start,
@@ -366,6 +370,7 @@ def generate_background_events(
     theta = parameter_dict2array(parameters)
     theta_without_mu = theta[2:]
 
+    # TODO: this takes a lot of time relatively
     area = polygon_surface(polygon)
     timewindow_length = to_days(timewindow_end - timewindow_start)
 
@@ -377,7 +382,9 @@ def generate_background_events(
         [max_lat, max_lon],
         [min_lat, max_lon],
     ]
+
     rectangle = Polygon(coords)
+    # TODO: this takes a lot of time relatively
     rectangle_area = polygon_surface(rectangle)
 
     # number of background events
@@ -496,6 +503,7 @@ def generate_background_events(
     return catalog.drop("geometry", axis=1)
 
 
+# @profile
 def generate_aftershocks(
     sources,
     generation,
@@ -519,6 +527,7 @@ def generate_aftershocks(
     # random timedeltas for all aftershocks
     total_n_aftershocks = sources["n_aftershocks"].sum()
 
+    # TODO: simulate_aftershock_time takes 15% of time
     if parameters["log10_tau"] == np.inf:
         all_deltas = simulate_aftershock_time_untapered(
             log10_c=parameters["log10_c"],
@@ -553,6 +562,7 @@ def generate_aftershocks(
         [col for col in aftershocks.columns if "parent" in col]
     ].reset_index(drop=True)
     aftershocks["time_delta"] = all_deltas
+    # TODO: the next 3 "aftershocks.query" is each taking 10% of time
     aftershocks.query("time_delta <= @ timewindow_length", inplace=True)
 
     aftershocks["time"] = aftershocks["parent_time"] + pd.to_timedelta(
@@ -814,6 +824,7 @@ def generate_catalog(
     return catalog.drop("geometry", axis=1)
 
 
+# @task()
 def simulate_catalog_continuation(
     auxiliary_catalog,
     auxiliary_start,
@@ -843,7 +854,8 @@ def simulate_catalog_continuation(
     induced_bsla=None,
     induced_bslo=None,
     n_induced=None,
-):
+) -> object:
+    # TODO: This function is called many times
     """
     auxiliary_catalog : pd.DataFrame
         Catalog used for aftershock generation in simulation period
@@ -908,6 +920,7 @@ def simulate_catalog_continuation(
     if beta_aftershock is None:
         beta_aftershock = beta_main
 
+    # TODO: 30% of time
     background = generate_background_events(
         polygon,
         auxiliary_end,
@@ -984,6 +997,7 @@ def simulate_catalog_continuation(
 
     while True:
         logger.debug(f"generation {generation}")
+        # TODO: 15% of time
         sources = catalog.query(
             "generation == @generation and n_aftershocks > 0"
         ).copy()
@@ -995,6 +1009,7 @@ def simulate_catalog_continuation(
             break
 
         # an array with all aftershocks. to be appended to the catalog
+        # TODO: 35% of time
         aftershocks = generate_aftershocks(
             sources,
             generation,
@@ -1184,10 +1199,9 @@ class ETASSimulation:
         self.forecast_end_date = self.forecast_start_date + dt.timedelta(
             days=forecast_n_days
         )
-
-        simulations = pd.DataFrame()
+        catalog_list = []
         for sim_id in np.arange(i_start, n_simulations):
-            continuation = simulate_catalog_continuation(
+            df = simulate_catalog_continuation(
                 self.catalog,
                 auxiliary_start=self.inversion_params.auxiliary_start,
                 auxiliary_end=self.forecast_start_date,
@@ -1221,44 +1235,84 @@ class ETASSimulation:
                 n_induced=self.n_induced,
             )
 
-            continuation["catalog_id"] = sim_id
-            simulations = pd.concat(
-                [simulations, continuation], ignore_index=False)
+            df["catalog_id"] = sim_id
+            catalog_list.append(df)
 
-            if sim_id % chunksize == 0 or sim_id == n_simulations - 1:
-                simulations.query(
-                    "time>=@self.forecast_start_date and "
-                    "time<=@self.forecast_end_date and "
-                    "magnitude>=@m_threshold-@self.inversion_params.delta_m/2",
-                    inplace=True,
-                )
-                if self.inversion_params.delta_m > 0:
-                    simulations.magnitude = bin_to_precision(
-                        simulations.magnitude, self.inversion_params.delta_m
-                    )
-                simulations.index.name = "id"
-                self.logger.debug(
-                    "storing simulations up to {}".format(sim_id))
-                self.logger.debug(
-                    f"took {dt.datetime.now() - start} to simulate "
-                    f"{sim_id + 1} catalogs."
-                )
+        # store = compss_wait_on(store)
 
-                # now filter polygon
-                if filter_polygon:
-                    simulations = gpd.GeoDataFrame(
-                        simulations,
-                        geometry=gpd.points_from_xy(
-                            simulations.latitude, simulations.longitude
-                        ),
-                    )
-                    simulations = simulations[simulations.intersects(
-                        self.polygon)]
+        simulations = pd.concat(catalog_list, ignore_index=True)
 
-                yield simulations[cols]
+        # simulations = pd.DataFrame()
+        # final_df = pd.concat(df_list, ignore_index=True)
+        # simulations = pd.concat(
+        #     [simulations, continuation], ignore_index=False)
 
-                simulations = pd.DataFrame()
+        # if sim_id % chunksize == 0 or sim_id == n_simulations - 1:
+        #     simulations.query(
+        #         "time>=@self.forecast_start_date and "
+        #         "time<=@self.forecast_end_date and "
+        #         "magnitude>=@m_threshold-@self.inversion_params.delta_m/2",
+        #         inplace=True,
+        #     )
+        #     if self.inversion_params.delta_m > 0:
+        #         simulations.magnitude = bin_to_precision(
+        #             simulations.magnitude, self.inversion_params.delta_m
+        #         )
+        #     simulations.index.name = "id"
+        #     self.logger.debug(
+        #         "storing simulations up to {}".format(sim_id))
+        #     self.logger.debug(
+        #         f"took {dt.datetime.now() - start} to simulate "
+        #         f"{sim_id + 1} catalogs."
+        #     )
+
+        #     # now filter polygon
+        #     if filter_polygon:
+        #         simulations = gpd.GeoDataFrame(
+        #             simulations,
+        #             geometry=gpd.points_from_xy(
+        #                 simulations.latitude, simulations.longitude
+        #             ),
+        #         )
+        #         simulations = simulations[simulations.intersects(
+        #             self.polygon)]
+
+        #     yield simulations[cols]
+
+        #     simulations = pd.DataFrame()
+
+        simulations.query(
+            "time>=@self.forecast_start_date and "
+            "time<=@self.forecast_end_date and "
+            "magnitude>=@m_threshold-@self.inversion_params.delta_m/2",
+            inplace=True,
+        )
+
+        if self.inversion_params.delta_m > 0:
+            simulations.magnitude = bin_to_precision(
+                simulations.magnitude, self.inversion_params.delta_m
+            )
+        simulations.index.name = "id"
+        self.logger.debug(
+            "storing simulations up to {}".format(sim_id))
+        self.logger.debug(
+            f"took {dt.datetime.now() - start} to simulate "
+            f"{sim_id + 1} catalogs."
+        )
+
+        # now filter polygon
+        if filter_polygon:
+            simulations = gpd.GeoDataFrame(
+                simulations,
+                geometry=gpd.points_from_xy(
+                    simulations.latitude, simulations.longitude
+                ),
+            )
+            simulations = simulations[simulations.intersects(
+                self.polygon)]
+
         self.logger.info("DONE simulating!")
+        return simulations[cols]
 
     def simulate_to_csv(
         self,
@@ -1347,13 +1401,19 @@ class ETASSimulation:
         info_cols: list = [],
     ) -> ForecastCatalog:
         store = pd.DataFrame()
-        for chunk in self.simulate(
-            forecast_n_days,
-            n_simulations,
-            m_threshold,
-            filter_polygon,
-            chunksize,
-            info_cols,
-        ):
-            store = pd.concat([store, chunk], ignore_index=False)
+        # for chunk in self.simulate(
+        #     forecast_n_days,
+        #     n_simulations,
+        #     m_threshold,
+        #     filter_polygon,
+        #     chunksize,
+        #     info_cols,
+        # ):
+        #     store = pd.concat([store, chunk], ignore_index=False)
+        store = self.simulate(forecast_n_days,
+                              n_simulations,
+                              m_threshold,
+                              filter_polygon,
+                              chunksize,
+                              info_cols)
         return ForecastCatalog(data=store)

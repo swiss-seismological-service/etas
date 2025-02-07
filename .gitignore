@@ -1,5 +1,7 @@
 # Custom
 output_data/
+dislib
+test_matmul
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

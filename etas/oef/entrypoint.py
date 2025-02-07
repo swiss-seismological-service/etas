@@ -1,4 +1,3 @@
-import json
 from importlib import resources
 
 import numpy as np

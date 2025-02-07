@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import pyproj
 import shapely.ops as ops
+# from line_profiler import profile
 from scipy.optimize import NonlinearConstraint, linprog, minimize
 from scipy.spatial import ConvexHull
 from scipy.special import exp1
@@ -147,6 +148,7 @@ def rectangle_surface(lat1, lat2, lon1, lon2):
 
 
 def polygon_surface(polygon):
+    # TODO: can this function be made faster?
     proj_wgs84 = pyproj.CRS('EPSG:4326')
     proj_aea = pyproj.CRS(
         proj="aea", lat_1=polygon.bounds[0], lat_2=polygon.bounds[2])
@@ -180,6 +182,7 @@ def haversine(lat_rad_1,
     """
     Calculates the distance on a sphere.
     """
+    # TODO: Can this function be made faster?
     d = (
         2
         * earth_radius
@@ -243,6 +246,8 @@ def to_days(timediff):
     return timediff / dt.timedelta(days=1)
 
 
+# x is 2748/vector, a is a scalar
+# @profile
 def upper_gamma_ext(a, x):
     if a > 0:
         return gammaincc(a, x) * gamma_func(a)
@@ -381,6 +386,7 @@ def observation_factor(beta, delta_mc):
     return zeta_plus_1
 
 
+# @profile
 def expected_aftershocks(event, params, no_start=False, no_end=False):
     theta, mc = params
 
@@ -401,6 +407,7 @@ def expected_aftershocks(event, params, no_start=False, no_end=False):
         else:
             event_magnitude, event_time_to_start, event_time_to_end = event
 
+    # next two take a bit of time
     number_factor = k0 * np.exp(a * (event_magnitude - mc))
     area_factor = (
         np.pi * np.power(d * np.exp(gamma
@@ -418,14 +425,14 @@ def expected_aftershocks(event, params, no_start=False, no_end=False):
     else:
         if tau == np.inf:
             time_factor = np.power(event_time_to_start + c, -omega) / omega
-        else:
+        else:  # this is executed, takes a bit of time
             time_fraction = upper_gamma_ext(-omega,
                                             (event_time_to_start + c) / tau)
     if not no_end:
         if tau == np.inf:
             time_factor = time_factor - \
                 np.power(event_time_to_end + c, -omega) / omega
-        else:
+        else:  # longest here
             time_fraction = time_fraction - upper_gamma_ext(
                 -omega, (event_time_to_end + c) / tau
             )
@@ -443,6 +450,7 @@ def ll_aftershock_term(l_hat, g):
     return term
 
 
+# @profile
 def neg_log_likelihood(theta, Pij, source_events, mc_min):
     assert Pij.index.names == ("source_id", "target_id"), logger.error(
         'Pij must have multiindex with names "source_id", "target_id"'
@@ -456,7 +464,8 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
     c = np.power(10, log10_c)
     tau = np.power(10, log10_tau)
     d = np.power(10, log10_d)
-
+    # TODO: Gamma Functions inside this are using the time
+    # source events 2748*6
     source_events["G"] = expected_aftershocks(
         [
             source_events["source_magnitude"],
@@ -472,25 +481,26 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
     ).sum()
 
     # space time distribution term
+    # 30% of time
+    # PIJ: long dataframe (72677*15) or more, rest are scalars
     Pij["likelihood_term"] = (
         (
             omega * np.log(tau)
             - np.log(upper_gamma_ext(-omega, c / tau))
             + np.log(rho)
-            + rho * np.log(d * np.exp(gamma
-                           * (Pij["source_magnitude"] - mc_min)))
+            + rho
+            * np.log(d * np.exp(gamma * (Pij["source_magnitude"] - mc_min)))
         )
-        - (
-            (1 + rho)
-            * np.log(
-                Pij["spatial_distance_squared"]
-                + (d * np.exp(gamma * (Pij["source_magnitude"] - mc_min)))
-            )
-        )
+        - ((1 + rho)
+            * np.log(Pij["spatial_distance_squared"]
+                     + (d * np.exp(gamma * (Pij["source_magnitude"] - mc_min)))
+                     )
+           )
         - (1 + omega) * np.log(Pij["time_distance"] + c)
         - (Pij["time_distance"] + c) / tau
         - np.log(np.pi)
     )
+
     distribution_term = Pij["Pij"].mul(
         Pij["zeta_plus_1"]).mul(Pij["likelihood_term"]).sum()
 
@@ -546,6 +556,7 @@ def expected_aftershocks_free_prod(
     return number_factor * area_factor * time_factor
 
 
+# @profile
 def neg_log_likelihood_free_prod(
     theta,
     n_hat,
@@ -1352,6 +1363,7 @@ class ETASParameterCalculation:
             theta_0_without_mu = theta_0[4:]
             bounds = ranges[4:]
 
+            # TODO: too long, see next case
             res = minimize(
                 neg_log_likelihood_free_prod,
                 x0=theta_0_without_mu,
@@ -1385,7 +1397,8 @@ class ETASParameterCalculation:
         else:
             theta_0_without_mu = theta_0[2:]
             bounds = ranges[2:]
-
+            # TODO: The currently actually executed
+            # minimize which is taking too long
             res = minimize(
                 neg_log_likelihood,
                 x0=theta_0_without_mu,
@@ -1494,6 +1507,7 @@ class ETASParameterCalculation:
         with open(fn_parameters, "w") as f:
             f.write(json.dumps(all_info))
 
+    # @profile
     def calculate_distances(self):
         """
         Precalculates distances in time and space between events that are
@@ -1628,6 +1642,7 @@ class ETASParameterCalculation:
             if source.time < self.timewindow_start:
                 potential_targets = targets.copy()
             else:
+                # TODO: 35% of the functions time is spent here
                 potential_targets = targets.query("time>@stime").copy()
             targets = potential_targets.copy()
 
@@ -1651,6 +1666,7 @@ class ETASParameterCalculation:
 
                 # calculate spatial distance from source to target event
                 potential_targets["spatial_distance_squared"] = np.square(
+                    # TODO: 10% of the functtions time is spent here
                     haversine(
                         slatrad,
                         potential_targets["target_lat_rad"],
@@ -1662,6 +1678,8 @@ class ETASParameterCalculation:
 
             # filter for only small enough distances
             drs = source.distance_range_squared  # noqa
+
+            # TODO: 40% of the functions time is spent here
             potential_targets.query(
                 "spatial_distance_squared <= @drs", inplace=True)
 

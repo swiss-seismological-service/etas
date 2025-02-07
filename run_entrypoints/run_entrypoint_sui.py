@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 import numpy as np
-from seismostats.io.client import FDSNWSEventClient
+from seismostats.io.client import FDSNWSEventClient  # noqa
 from shapely.geometry import Polygon
 from shapely.wkt import dumps
 
@@ -23,26 +23,34 @@ def main():
     timewindow_start = datetime.strptime("1980-01-01 00:00:00", format)
     timewindow_end = datetime.now()
 
-    min_longitude = 5
-    max_longitude = 11
-    min_latitude = 45
-    max_latitude = 48
-    min_magnitude = 2
+    # ####################### FROM FDSNWS ########################
+    # min_longitude = 5
+    # max_longitude = 11
+    # min_latitude = 45
+    # max_latitude = 48
+    # min_magnitude = 2
 
-    url = 'http://eida.ethz.ch/fdsnws/event/1/query'
-    client = FDSNWSEventClient(url)
-    catalog = client.get_events(
-        start_time=auxiliary_start,
-        end_time=timewindow_end,
-        min_magnitude=min_magnitude,
-        min_longitude=min_longitude,
-        max_longitude=max_longitude,
-        min_latitude=min_latitude,
-        max_latitude=max_latitude,
-        include_all_magnitudes=True,
-        event_type='earthquake',
-        include_uncertainty=True,
-        include_ids=True)
+    # url = 'http://eida.ethz.ch/fdsnws/event/1/query'
+    # client = FDSNWSEventClient(url)
+    # catalog = client.get_events(
+    #     start_time=auxiliary_start,
+    #     end_time=timewindow_end,
+    #     min_magnitude=min_magnitude,
+    #     min_longitude=min_longitude,
+    #     max_longitude=max_longitude,
+    #     min_latitude=min_latitude,
+    #     max_latitude=max_latitude,
+    #     include_all_magnitudes=True,
+    #     event_type='earthquake',
+    #     include_uncertainty=True,
+    #     include_ids=True)
+    # with open('full.xml', 'w') as f:
+    #     f.write(catalog.to_quakeml())
+    # return
+
+    # ####################### FROM FILE ########################
+    with open('full.xml', 'r') as f:
+        catalog = f.read()
 
     polygon = Polygon(np.load('../etas/oef/data/ch_shape_buffer.npy'))
 
@@ -54,7 +62,8 @@ def main():
         'bounding_polygon': dumps(polygon),
         'depth_min': 0,
         'depth_max': 1,                         # always in WGS84
-        'seismicity_observation': catalog.to_quakeml(),
+        # 'seismicity_observation': catalog.to_quakeml(),
+        'seismicity_observation': catalog,
         'model_parameters': {
             "theta_0": {
                 "log10_mu": -6.21,
