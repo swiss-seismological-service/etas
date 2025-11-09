@@ -11,7 +11,7 @@ from etas import set_up_logger
 from etas.inversion import ETASParameterCalculation
 from etas.simulation import ETASSimulation
 
-set_up_logger(level=logging.DEBUG)
+set_up_logger(level=logging.INFO)
 
 
 def default_cfg_path():
