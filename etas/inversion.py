@@ -517,9 +517,9 @@ def expected_aftershocks_free_prod(
         if no_end:
             event_magnitude, event_kappa, event_time_to_start = event
         else:
-            event_magnitude,
-            event_kappa,
-            event_time_to_start,
+            event_magnitude = event
+            event_kappa = event
+            event_time_to_start = event
             event_time_to_end = event
 
     number_factor = event_kappa
@@ -661,6 +661,32 @@ def calc_diff_to_before(a, b):
             ]
         )
     )
+
+
+def parse_catalog(fn_catalog):
+
+    try:
+        catalog = pd.read_csv(
+            fn_catalog,
+            index_col=0,
+            parse_dates=['time'],
+            dtype={'url': str, 'alert': str})
+
+    except ValueError:
+        logger.info('Reading CSEP format input catalog')
+        catalog = pd.read_csv(
+            fn_catalog,
+            index_col=6,
+            parse_dates=['time_string'],
+            dtype={'url': str, 'alert': str})
+        mapper = {'lon': 'longitude',
+                  'lat': 'latitude',
+                  'time_string': 'time',
+                  'mag': 'magnitude'}
+        catalog.rename(columns=mapper, inplace=True)
+
+    catalog["time"] = pd.to_datetime(catalog["time"], format="ISO8601")
+    return catalog
 
 
 class ETASParameterCalculation:
@@ -813,15 +839,7 @@ class ETASParameterCalculation:
         self.inversion_done = False
 
         if not isinstance(self.catalog, pd.DataFrame):
-            self.catalog = pd.read_csv(
-                self.fn_catalog,
-                index_col=0,
-                parse_dates=["time"],
-                dtype={"url": str, "alert": str},
-            )
-            self.catalog["time"] = pd.to_datetime(
-                self.catalog["time"], format="ISO8601"
-            )
+            self.catalog = parse_catalog(self.fn_catalog)
 
         self.distances = None
         self.source_events = None
@@ -898,14 +916,8 @@ class ETASParameterCalculation:
             obj.oef_setting = None
 
         if obj.fn_catalog is not None:
-            obj.catalog = pd.read_csv(
-                obj.fn_catalog,
-                index_col=0,
-                parse_dates=["time"],
-                dtype={"url": str, "alert": str},
-            )
-            obj.catalog["time"] = pd.to_datetime(
-                obj.catalog["time"], format="ISO8601")
+            obj.catalog = parse_catalog(obj.fn_catalog)
+
         else:
             obj.catalog = None
             if not obj.oef_setting:
@@ -1492,7 +1504,7 @@ class ETASParameterCalculation:
             all_info["fn_dist"] = fn_dist
 
         with open(fn_parameters, "w") as f:
-            f.write(json.dumps(all_info))
+            f.write(json.dumps(all_info, indent=2))
 
     def calculate_distances(self):
         """

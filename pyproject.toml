@@ -37,3 +37,6 @@ hermes = [
     "hermes-model @ git+https://gitlab.seismo.ethz.ch/indu/hermes-model.git",
     "seismostats @ git+https://github.com/swiss-seismological-service/SeismoStats.git",
 ]
+
+[project.scripts]
+etas-run = "etas.cmd.run:main"        # console script

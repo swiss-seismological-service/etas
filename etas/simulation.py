@@ -21,7 +21,6 @@ import numpy as np
 import pandas as pd
 from scipy.special import gamma as gamma_func
 from scipy.special import gammainccinv
-from seismostats import ForecastCatalog
 from shapely.geometry import Polygon
 
 from etas.inversion import (ETASParameterCalculation, branching_integral,
@@ -314,7 +313,7 @@ def simulate_background_location(
     bslo=None,
     n=1,
 ):
-    np.random.seed()
+
     assert np.max(background_probs) <= 1, "background_probs cannot exceed 1"
 
     keep_idxs = []
@@ -1168,7 +1167,6 @@ class ETASSimulation:
             info_cols: list = ["is_background"],
             i_start: int = 0):
         start = dt.datetime.now()
-        np.random.seed()
         logger.debug("induced info: {}".format(self.induced))
 
         if m_threshold is None:
@@ -1337,23 +1335,98 @@ class ETASSimulation:
         for chunk in generator:
             chunk.to_csv(fn_store, mode="a", header=False, index=True)
 
-    def simulate_to_df(
+    def simulate_to_csep(
         self,
+        fn_store: str,
         forecast_n_days: int,
         n_simulations: int,
         m_threshold: float = None,
         filter_polygon: bool = True,
         chunksize: int = 100,
         info_cols: list = [],
-    ) -> ForecastCatalog:
-        store = pd.DataFrame()
-        for chunk in self.simulate(
-            forecast_n_days,
-            n_simulations,
-            m_threshold,
-            filter_polygon,
-            chunksize,
-            info_cols,
-        ):
-            store = pd.concat([store, chunk], ignore_index=False)
-        return ForecastCatalog(data=store)
+        i_start: int = 0,
+        seed: int = None
+    ) -> None:
+        if seed is not None:
+            np.random.seed(seed)
+
+        def _transform_csep(df, offset: int) -> tuple[pd.DataFrame, int]:
+            out = pd.DataFrame({
+                "lon": df["longitude"].to_numpy(),
+                "lat": df["latitude"].to_numpy(),
+                "mag": df["magnitude"].to_numpy(),
+                "time_string": pd.to_datetime(df["time"], errors="coerce")
+                                   .dt.floor("s")
+                                   .dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "depth": 0,
+                "catalog_id": df["catalog_id"].to_numpy() if "catalog_id" in df.columns else 0,
+                "event_id": range(offset, offset + len(df)),
+            })
+            return out, offset + len(out)
+
+        out_cols = ["lon", "lat", "mag", "time_string", "depth", "catalog_id", "event_id"]
+
+        i_end = i_start + n_simulations
+        os.makedirs(os.path.dirname(fn_store), exist_ok=True)
+
+        event_id_offset = 0  # keeps event_id continuous across writes
+
+        if not os.path.exists(fn_store):
+            # create new file for first chunk
+            generator = self.simulate(
+                forecast_n_days,
+                i_end,
+                m_threshold,
+                filter_polygon,
+                chunksize,
+                info_cols,
+                i_start=i_start,
+            )
+
+            first_chunk = next(generator)
+            out0, event_id_offset = _transform_csep(first_chunk, event_id_offset)
+            out0.to_csv(fn_store, mode="w", header=True, index=False, columns=out_cols)
+        else:
+            logger.info("file already exists.")
+            with open(fn_store, "r") as f:
+                lines = f.read().splitlines()
+                first_line = lines[0].split(",")
+                if "catalog_id" in first_line:
+                    cat_id_index = first_line.index("catalog_id")
+                    last_line = lines[-1].split(",")
+                    last_index = int(float(last_line[cat_id_index]))
+                    logger.debug("simulations were stored until index {}".format(last_index))
+                else:
+                    logger.info("no column 'catalog_id' in this file.")
+                    last_index = -1
+
+            # event_id should continue after existing rows (header + data lines)
+            event_id_offset = max(0, len(lines) - 1)
+            max_store_incomplete = ((n_simulations - 1) // chunksize) * chunksize
+            if last_index > max_store_incomplete:
+                logger.debug("all done, nothing left to do.")
+                exit()
+            else:
+                chunks_done = last_index // chunksize
+                if last_index % chunksize > 0:
+                    # last simulation done
+                    # didn't have any events
+                    chunks_done += 1
+
+                i_next = chunks_done * chunksize + 1
+                logger.debug("will continue from simulation {}.".format(i_next))
+
+                generator = self.simulate(
+                    forecast_n_days,
+                    i_end,
+                    m_threshold,
+                    filter_polygon,
+                    chunksize,
+                    info_cols,
+                    i_start=i_next,
+                )
+
+        # append rest of chunks to file
+        for chunk in generator:
+            out, event_id_offset = _transform_csep(chunk, event_id_offset)
+            out.to_csv(fn_store, mode="a", header=False, index=False, columns=out_cols)

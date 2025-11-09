@@ -1,5 +1,0 @@
-{
-  "forecast_duration": 365,
-  "fn_store_simulation": "../output_data/simulated_catalog_continuation.csv",
-  "fn_inversion_output": "../output_data/parameters_0.json"
-}

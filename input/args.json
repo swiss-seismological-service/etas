@@ -1,0 +1,29 @@
+{
+  "start_date": "2016-01-28T00:00:00",
+  "end_date": "2016-02-24T00:00:00",
+  "fn_catalog": "catalog.csv",
+  "data_path": "../store",
+  "auxiliary_start": "2010-01-01 00:00:00",
+  "timewindow_start": "2012-01-01 00:00:00",
+  "free_productivity": false,
+  "free_background": false,
+  "theta_0": {
+    "log10_mu": -7.0989876826344664,
+    "log10_k0": -1.4882556332795929,
+    "a": 3.799155859357253,
+    "log10_c": -2.2657512576474916,
+    "omega": 0.16055109784146324,
+    "log10_tau": 3.060052929281954,
+    "log10_d": 0.37312723032084205,
+    "gamma": 1.381396473768396,
+    "rho": 1.4081069589312865
+  },
+  "mc": 3.0,
+  "delta_m": 0.1,
+  "coppersmith_multiplier": 100,
+  "earth_radius": 6.3781e3,
+  "shape_coords": "../data/italy_region.npy",
+  "id": "it",
+  "fn_store_simulation": "../forecasts/",
+  "n_sims": 2
+}
