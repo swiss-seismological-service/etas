@@ -1,0 +1,36 @@
+{
+  "fn_catalog": "../../data-preparation/emsc_merged_cat_2022.csv",
+  "data_path": "/cluster/scratch/marhan/new_inversions/",
+  "auxiliary_start": "1980-01-01 00:00:00",
+  "timewindow_start": "1990-01-01 00:00:00",
+  "timewindow_end": "2019-01-01 00:00:00",
+  "theta_0": {
+    "log10_mu": -7.83721772631417,
+    "log10_k0": -1.606744850995688,
+    "a": 2.200463473795427,
+    "log10_c": -2.6019384720803362,
+    "omega": -0.09788518589288804,
+    "log10_tau": 3.6370349732014136,
+    "log10_d": 0.8331798021862536,
+    "gamma": 1.415898617123485,
+    "rho": 0.6981330484664455
+  },
+  "fixed_parameters": {
+    "log10_k0": -1.606744850995688,
+    "a": 2.200463473795427,
+    "log10_c": -2.6019384720803362,
+    "omega": -0.09788518589288804,
+    "log10_tau": 3.6370349732014136,
+    "log10_d": 0.8331798021862536,
+    "gamma": 1.415898617123485,
+    "rho": 0.6981330484664455
+  },
+  "mc": "var",
+  "m_ref": 3.6,
+  "delta_m": 0.2,
+  "coppersmith_multiplier": 100,
+  "shape_coords": "../input_data/europe_shape_r.npy",
+  "fn_pij": "/cluster/scratch/marhan/pijs/",
+  "id": "noid",
+  "name": "noname"
+}
