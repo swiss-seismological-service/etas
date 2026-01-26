@@ -16,6 +16,7 @@ import logging
 import os
 import pprint
 import uuid
+import math
 
 import geopandas as gpd
 import numpy as np
@@ -38,13 +39,13 @@ logger = logging.getLogger(__name__)
 LOG10_MU_RANGE = (-10, 0)
 LOG10_IOTA_RANGE = (-10, 0)
 LOG10_K0_RANGE = (-20, 10)
-A_RANGE = (0.01, 20)
+A_RANGE = (0.01, 10)
 LOG10_C_RANGE = (-8, 0)
-OMEGA_RANGE = (-0.99, 1)
+OMEGA_RANGE = (-0.99, 10)
 LOG10_TAU_RANGE = (0.01, 12.26)
-LOG10_D_RANGE = (-4, 3)
-GAMMA_RANGE = (-1, 5.0)
-RHO_RANGE = (0.01, 5.0)
+LOG10_D_RANGE = (-4, 5)
+GAMMA_RANGE = (-1, 10.0)
+RHO_RANGE = (0.01, 10.0)
 RANGES = (
     LOG10_MU_RANGE,
     LOG10_IOTA_RANGE,
@@ -192,6 +193,59 @@ def haversine(lat_rad_1,
         )
     )
     return d
+
+
+def haversine_elliptic(lat_rad_1, lat_rad_2,
+                       lon_rad_1, lon_rad_2,
+                       ratio, theta,
+                       earth_radius=6.3781e3, self=None):
+    '''
+    Calculates the distance between two points on an elliptic sphere.
+    
+    Parameters:
+    - lat_rad_1, lat_rad_2: Latitude of the two points (radians)
+    - lon_rad_1, lon_rad_2: Longitude of the two points (radians)
+    - ratio: Ratio of major to minor axis
+    - theta: Angle related to the elliptic sphere's tilt (radians)
+    - earth_radius: Radius of the Earth (default 6.3781e3 meters)
+    - self: Optional, for logging purposes (if the function is part of a class)
+    
+    Returns:
+    - Normalized distance between the two points considering Earth's elliptic shape.
+    '''
+
+    #lon_rad_1, lon_rad_2 = np.array(lon_rad_1), np.array(lon_rad_2)
+    #lat_rad_1, lat_rad_2 = np.array(lat_rad_1), np.array(lat_rad_2)
+
+    a = np.sqrt(ratio)
+    b = 1 / a
+
+    delta_lon = lon_rad_2 - lon_rad_1
+    delta_lat = lat_rad_2 - lat_rad_1
+
+    denom = np.where(
+        np.abs((delta_lat * np.cos(theta) - delta_lon * np.sin(theta))) > 1e-5, 
+        (delta_lon * np.cos(theta) + delta_lat * np.sin(theta)) / \
+        (delta_lat * np.cos(theta) - delta_lon * np.sin(theta)),
+        1 
+    )
+
+    dist_is_zero = np.logical_and(delta_lon==0, delta_lat==0)
+
+    phi = np.arctan(ratio / denom)
+
+    x_normalized = a * np.cos(theta) * np.cos(phi) - b * np.sin(theta) * np.sin(phi)
+    y_normalized = a * np.sin(theta) * np.cos(phi) + b * np.cos(theta) * np.sin(phi)
+
+    d = 2 * earth_radius * np.arcsin(
+        np.sqrt(hav(lat_rad_1 - lat_rad_2) + 
+                np.cos(lat_rad_1) * np.cos(lat_rad_2) * hav(lon_rad_1 - lon_rad_2))
+    )
+
+    d[dist_is_zero] = 0
+    d_normalized = np.sqrt(x_normalized ** 2 + y_normalized ** 2)
+    
+    return d / d_normalized
 
 
 def branching_integral(alpha_minus_beta, dm_max=None):
@@ -840,6 +894,8 @@ class ETASParameterCalculation:
         self.i_hat = None
         self.i = metadata.get("n_iterations")
 
+        self.ar_max = None
+
     @classmethod
     def load_calculation(cls, metadata: dict):
         obj = cls.__new__(cls)
@@ -967,7 +1023,8 @@ class ETASParameterCalculation:
 
         return obj
 
-    def prepare(self):
+    def prepare(self, n_limit=None):
+        self.n_event_limit = n_limit
         if self.preparation_done:
             self.logger.warning("Preparation already done, aborting...")
             pass
@@ -1107,6 +1164,83 @@ class ETASParameterCalculation:
     def theta(self, t):
         self.__theta = parameter_dict2array(t) if t is not None else None
 
+    def recalculate_distances(self):
+        self.logger.info("  recalculating distances to match new ellipses")
+        dists = self.distances.copy()
+        sources = self.catalog.loc[dists.index.get_level_values('source_id'), ['longitude', 'latitude']]
+        targets = self.catalog.loc[dists.index.get_level_values('target_id'), ['longitude', 'latitude']]
+        source_ellipses = self.source_events.loc[dists.index.get_level_values('source_id'), ['aspect_ratio', 'orientation']]
+        sratio = source_ellipses.aspect_ratio
+        stheta = source_ellipses.orientation
+        new_dists = np.square(
+            haversine_elliptic(
+                np.radians(list(sources.latitude)),
+                np.radians(list(targets.latitude)),
+                np.radians(list(sources.longitude)),
+                np.radians(list(targets.longitude)),
+                sratio, stheta,
+                self.earth_radius
+            )
+        )
+        dists.spatial_distance_squared = new_dists.values
+        dists["spatial_distance_squared"] = dists["spatial_distance_squared"].fillna(0)
+
+        return dists
+
+    def reestimate_ellipses(self):
+        grouped = self.pij.groupby('source_id')
+        self.logger.info("  reestimating ellipses")
+        aspect_ratios = {}
+        orientations = {}
+        count_ellipses = 0
+
+        for source, targets in grouped:
+            target_ids = targets['index']
+            Pij_values = targets['Pij'] * targets['zeta_plus_1']
+            afters = self.catalog.loc[target_ids]
+            
+            if Pij_values.sum() > 0 and len(afters) > 3:
+                try:
+                    x = afters['longitude']
+                    y = afters['latitude']
+                    min_pij = np.max([Pij_values.min(), 1e-10])
+                    w = Pij_values / min_pij
+                    w = w.astype(int)
+                    count_ellipses += 1
+                    covariance_matrix = np.cov(x, y, fweights=w)
+                    val, vec = np.linalg.eig(covariance_matrix)
+                    
+                    lam1, lam2 = np.sqrt(val[0]), np.sqrt(np.abs(val[1]))
+                    if lam1 != 0 and lam2 != 0:
+                        if lam1 > lam2:
+                            aspect_ratios[source] = (lam1 / lam2)
+                            orientations[source] = (math.atan(vec[1, 0] / vec[0, 0]))
+                        else:
+                            aspect_ratios[source] = (lam2 / lam1)
+                            orientations[source] = (math.atan(vec[1, 1] / vec[0, 1]))
+
+                        aspect_ratios[source] = min(aspect_ratios[source], self.ar_max(len(afters)))
+                    else:
+                        aspect_ratios[source] = 1
+                        orientations[source] = 1
+                except:
+                    aspect_ratios[source] = 1
+                    orientations[source] = 1
+            else:
+                aspect_ratios[source] = 1
+                orientations[source] = 1
+
+        self.source_events.aspect_ratio = self.source_events.index.map(aspect_ratios)
+        self.source_events.orientation = self.source_events.index.map(orientations)
+        self.logger.info("reestimated {} ellipses".format(count_ellipses))
+        self.source_events.fillna(1, inplace=True)
+       # self.source_events.loc[self.source_events['aspect_ratio'] > 100, 'aspect_ratio'] = 100
+       # self.catalog.index.map(aspect_ratios)
+       # self.catalog.index.map(orientations)
+
+        return self.source_events
+
+
     def invert(self):
         """
         Invert the ETAS (or flETAS) parameters.
@@ -1124,6 +1258,8 @@ class ETASParameterCalculation:
         while diff_to_before >= 0.001:
             self.logger.info("  iteration {}".format(i))
 
+            if i>0: self.distances = self.recalculate_distances()
+
             self.logger.debug("    expectation step")
             (
                 self.pij,
@@ -1132,6 +1268,8 @@ class ETASParameterCalculation:
                 self.n_hat,
                 self.i_hat,
             ) = self.expectation_step(theta_old, self.m_ref - self.delta_m / 2)
+
+            self.source_events = self.reestimate_ellipses()
 
             self.logger.debug("      n_hat: {}".format(self.n_hat))
             self.logger.debug("      i_hat: {}".format(self.i_hat))
@@ -1321,6 +1459,8 @@ class ETASParameterCalculation:
             "source_completeness_above_ref",
             "source_to_end_time_distance",
             "pos_source_to_start_time_distance",
+            "aspect_ratio",
+            "orientation"
         ]
 
         sources = self.catalog.query("magnitude >= mc_current").copy()
@@ -1336,6 +1476,9 @@ class ETASParameterCalculation:
             sources["mc_current"] - self.m_ref
         )
         sources.index.name = "source_id"
+
+        sources["aspect_ratio"] = np.ones(len(sources))
+        sources["orientation"] = np.ones(len(sources))
 
         return sources[source_columns]
 
@@ -1629,6 +1772,10 @@ class ETASParameterCalculation:
                 potential_targets = targets.copy()
             else:
                 potential_targets = targets.query("time>@stime").copy()
+
+            if self.n_event_limit is not None:
+                potential_targets = potential_targets.head(self.n_event_limit)
+
             targets = potential_targets.copy()
 
             if potential_targets.shape[0] == 0:
@@ -1792,6 +1939,7 @@ class ETASParameterCalculation:
         if self.bg_term is not None:
             Pij_0["tot_rates"] = Pij_0["tot_rates"].add(target_events_0["ind"])
         Pij_0["Pij"] = Pij_0["gij"].div(Pij_0["tot_rates"])
+        self.logger.debug(" Pij min and max: {}".format((Pij_0["Pij"].min(), Pij_0["Pij"].max())))
 
         # calculate probabilities of being triggered or background
         target_events_0["P_triggered"] = 0
