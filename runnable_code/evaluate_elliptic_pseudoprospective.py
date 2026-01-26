@@ -122,10 +122,9 @@ for i in tqdm(np.arange(len(test_cat))):
 
     n_events = int(np.floor(i / 5) * 5)
     if n_events == 0:
-        #sources = pd.read_csv(f"/cluster/scratch/marhan/new_inversions/sources_europe_cut_region_after_{3550}_new_events_step5_dynamic_ar.csv")
-        sources = sources
+        sources = pd.read_csv(f"sources_europe_cut_region_after_{3550}_new_events_step5_dynamic_ar.csv")
     else:
-        sources = pd.read_csv(f"/cluster/scratch/marhan/new_inversions/sources_europe_cut_region_after_{n_events}_new_events_step5_dynamic_ar_test_slope_{slope}.csv")
+        sources = pd.read_csv(f"sources_europe_cut_region_after_{n_events}_new_events_step5_dynamic_ar_test_slope_{slope}.csv")
     print(len(sources))
 
     cat2 = cat.merge(sources, "left",left_on=cat.index,right_on="source_id")[["time",

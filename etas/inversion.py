@@ -892,6 +892,7 @@ class ETASParameterCalculation:
         self.pij = None
         self.n_hat = None
         self.i_hat = None
+        self.mu_fixed = None
         self.i = metadata.get("n_iterations")
 
         self.ar_max = None
@@ -1086,6 +1087,15 @@ class ETASParameterCalculation:
             self.target_events["P_background"] = 0.1
 
         if self.fixed_parameters:
+            if "log10_mu" in self.fixed_parameters:
+                self.mu_fixed = np.power(10, self.fixed_parameters["log10_mu"])
+                # Remove mu from fixed parameters dict
+                self.fixed_parameters = {
+                    k: v
+                    for k, v in self.fixed_parameters.items()
+                    if k != "log10_mu"
+                }
+
             self.constraints = []
             starting_index = 2
 
@@ -1486,7 +1496,11 @@ class ETASParameterCalculation:
         start_calc = dt.datetime.now()
 
         # estimate mu independently and remove from parameters
-        mu_hat = self.n_hat / (self.area * self.timewindow_length)
+        if self.mu_fixed is not None:
+            mu_hat = self.mu_fixed
+        else:
+            mu_hat = self.n_hat / (self.area * self.timewindow_length)
+
         if self.bg_term is not None:
             iota_hat = self.i_hat / (self.area * self.timewindow_length)
 
