@@ -55,6 +55,25 @@ def bin_to_precision(x: np.ndarray | list, delta_x: float = 0.1) -> np.ndarray:
     return np.round(round_half_up(x / delta_x) * delta_x, decimal_places)
 
 
+def beta_from_latlon(lat_col, lon_col, beta_df, default_val=2.83):
+    lat_rounded = np.floor(np.array(lat_col) + 0.5).astype(int)
+    lon_rounded = np.floor(np.array(lon_col) + 0.5).astype(int)
+    
+    query_df = pd.DataFrame({
+        'lat_idx': lat_rounded,
+        'lon_idx': lon_rounded
+    })
+    
+    lookup_ref = beta_df.rename(columns={'latitude': 'lat_idx', 'longitude': 'lon_idx', 'b_average': 'b_value'})
+    result = query_df.merge(
+        lookup_ref[['lat_idx', 'lon_idx', 'b_value']], 
+        on=['lat_idx', 'lon_idx'], 
+        how='left'
+    )
+    result.to_csv("debug_beta_lookup.csv", index=False)
+    return result['b_value'].fillna(default_val).values
+
+
 def inverse_upper_gamma_ext(a, y):
     # TODO: find a more elegant way to do this
     if a > 0:
@@ -359,6 +378,7 @@ def generate_background_events(
     bslo=None,
     grid=False,
     mfd_zones=None,
+    beta_df=None,
     zones_from_latlon=None,
 ):
     from etas.inversion import polygon_surface, to_days
@@ -464,6 +484,15 @@ def generate_background_events(
     if mfd_zones is not None:
         zones = zones_from_latlon(catalog["latitude"], catalog["longitude"])
         catalog["magnitude"] = simulate_magnitudes_from_zone(zones, mfd_zones)
+    elif beta_df is not None:
+        #self.logger.info("using spatially variable beta to simulate background magnitudes")
+        betas = beta_from_latlon(catalog["latitude"], catalog["longitude"], beta_df=beta_df)
+        catalog["magnitude"] = simulate_magnitudes(
+            n_background,
+            beta=betas,
+            mc=mc - delta_m / 2,
+            m_max=m_max + delta_m / 2 if m_max is not None else None,
+        )
     else:
         catalog["magnitude"] = simulate_magnitudes(
             n_background,
@@ -476,6 +505,9 @@ def generate_background_events(
     catalog["generation"] = 0
     catalog["parent"] = 0
     catalog["is_background"] = True
+
+    catalog["orientation"] = 0.0          
+    catalog["aspect_ratio"] = 1.0
 
     # reindexing
     catalog = catalog.sort_values(by="time").reset_index(drop=True)
@@ -511,6 +543,7 @@ def generate_aftershocks(
     polygon=None,
     approx_times=False,
     mfd_zones=None,
+    beta_df=None,
     zones_from_latlon=None,
 ):
     theta = parameter_dict2array(parameters)
@@ -542,11 +575,14 @@ def generate_aftershocks(
 
     aftershocks = sources.loc[sources.index.repeat(sources.n_aftershocks)]
 
-    keep_columns = ["time", "latitude", "longitude", "magnitude"]
+    keep_columns = ["time", "latitude", "longitude", "magnitude", "aspect_ratio", "orientation", "id"]
     aftershocks["parent"] = aftershocks.index
 
     for col in keep_columns:
-        aftershocks["parent_" + col] = aftershocks[col]
+        if col=="id":
+            aftershocks["parent_id"] = aftershocks["parent"].copy()
+        else:
+            aftershocks["parent_" + col] = aftershocks[col]
 
     # time of aftershock
     aftershocks = aftershocks[
@@ -572,6 +608,18 @@ def generate_aftershocks(
     )
     aftershocks["angle"] = np.random.uniform(
         0, 2 * np.pi, size=len(aftershocks))
+    
+    dx_iso = aftershocks["radius"] * np.cos(aftershocks["angle"])
+    dy_iso = aftershocks["radius"] * np.sin(aftershocks["angle"])
+
+    E = aftershocks["parent_aspect_ratio"].fillna(1.0)
+    dx_scaled = dx_iso * np.sqrt(E)  
+    dy_scaled = dy_iso / np.sqrt(E) 
+    theta_rad = aftershocks["parent_orientation"].fillna(0.0)
+
+    dx_final = dx_scaled * np.cos(theta_rad) - dy_scaled * np.sin(theta_rad)
+    dy_final = dx_scaled * np.sin(theta_rad) + dy_scaled * np.cos(theta_rad)
+
     aftershocks["degree_lon"] = haversine(
         np.radians(aftershocks["parent_latitude"]),
         np.radians(aftershocks["parent_latitude"]),
@@ -586,15 +634,14 @@ def generate_aftershocks(
         np.radians(0),
         earth_radius,
     )
+    
     aftershocks["latitude"] = (
         aftershocks["parent_latitude"]
-        + (aftershocks["radius"] * np.cos(aftershocks["angle"]))
-        / aftershocks["degree_lat"]
+        + (dy_final / aftershocks["degree_lat"])
     )
     aftershocks["longitude"] = (
         aftershocks["parent_longitude"]
-        + (aftershocks["radius"] * np.sin(aftershocks["angle"]))
-        / aftershocks["degree_lon"]
+        + (dx_final / aftershocks["degree_lon"])
     )
 
     # as_cols = ["parent", "gen_0_parent", "time", "latitude", "longitude"]
@@ -613,6 +660,15 @@ def generate_aftershocks(
     if mfd_zones is not None:
         zones = zones_from_latlon(aadf["latitude"], aadf["longitude"])
         aadf["magnitude"] = simulate_magnitudes_from_zone(zones, mfd_zones)
+    elif beta_df is not None:
+        #self.logger.info("using spatially variable beta to simulate aftershock magnitudes")
+        betas = beta_from_latlon(aadf["latitude"], aadf["longitude"], beta_df=beta_df)
+        aadf["magnitude"] = simulate_magnitudes(
+            n_total_aftershocks,
+            beta=betas,
+            mc=mc - delta_m / 2,
+            m_max=m_max + delta_m / 2 if m_max is not None else None,
+        )
     else:
         aadf["magnitude"] = simulate_magnitudes(
             n_total_aftershocks,
@@ -624,6 +680,9 @@ def generate_aftershocks(
     # info about generation and being background
     aadf["generation"] = generation + 1
     aadf["is_background"] = False
+
+    aadf["orientation"] = 0.0
+    aadf["aspect_ratio"] = 1.0
 
     # info for next generation
     aadf["expected_n_aftershocks"] = expected_aftershocks(
@@ -647,6 +706,11 @@ def prepare_auxiliary_catalog(auxiliary_catalog, parameters, mc, delta_m=0):
     catalog.loc[:, "generation"] = 0
     catalog.loc[:, "parent"] = 0
     catalog.loc[:, "is_background"] = False
+
+    if "orientation" not in catalog.columns:
+        catalog["orientation"] = 0.0
+    if "aspect_ratio" not in catalog.columns:
+        catalog["aspect_ratio"] = 1.0
 
     # reindexing
     catalog["evt_id"] = catalog.index.values
@@ -791,6 +855,7 @@ def generate_catalog(
             timewindow_end=timewindow_end,
             timewindow_length=timewindow_length,
             approx_times=approx_times,
+            beta_df=beta_df
         )
 
         aftershocks.index += catalog.index.max() + 1
@@ -835,6 +900,7 @@ def simulate_catalog_continuation(
     bg_grid=False,
     mfd_zones=None,
     zones_from_latlon=None,
+    beta_df=None,
     filter_polygon=True,
     approx_times=False,
     induced_lats=None,
@@ -925,6 +991,7 @@ def simulate_catalog_continuation(
         bslo=bslo,
         grid=bg_grid,
         mfd_zones=mfd_zones,
+        beta_df=beta_df,
         zones_from_latlon=zones_from_latlon,
     )
     background["evt_id"] = ""
@@ -1008,6 +1075,7 @@ def simulate_catalog_continuation(
             auxiliary_end=auxiliary_end,
             approx_times=approx_times,
             mfd_zones=mfd_zones,
+            beta_df=beta_df,
             zones_from_latlon=zones_from_latlon,
         )
 
@@ -1063,6 +1131,7 @@ class ETASSimulation:
 
         self.mfd_zones = None
         self.zones_from_latlon = None
+        self.beta_df = None
 
         self.background_lats = None
         self.background_lons = None
@@ -1165,7 +1234,7 @@ class ETASSimulation:
             m_threshold: float = None,
             filter_polygon: bool = True,
             chunksize: int = 100,
-            info_cols: list = ["is_background"],
+            info_cols: list = ["is_background", "parent_id"],
             i_start: int = 0):
         start = dt.datetime.now()
         np.random.seed()
@@ -1213,6 +1282,7 @@ class ETASSimulation:
                 approx_times=self.approx_times,
                 mfd_zones=self.mfd_zones,
                 zones_from_latlon=self.zones_from_latlon,
+                beta_df=self.beta_df,
                 induced_lats=self.induced_lats,
                 induced_lons=self.induced_lons,
                 induced_term=self.induced_term,
