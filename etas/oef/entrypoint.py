@@ -3,6 +3,7 @@ from importlib import resources
 
 import numpy as np
 import pandas as pd
+import math
 
 from etas.inversion import (parameter_dict2array, responsibility_factor,
                             round_half_up)
@@ -19,7 +20,7 @@ from seismostats import Catalog, ForecastCatalog
 from shapely import Polygon, wkt
 
 from etas.inversion import ETASParameterCalculation
-from etas.simulation import ETASSimulation
+from etas.etas.simulation import ETASSimulation
 
 
 @validate_entrypoint(induced=False)
@@ -223,6 +224,7 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     polygon[:, [0, 1]] = polygon[:, [1, 0]]
     model_input.bounding_polygon = wkt.dumps(Polygon(polygon))
 
+    # Load ETAS inversion object but adjust to simulation properties
     etas_parameters = ETASParameterCalculation(model_parameters)
 
     etas_parameters.timewindow_end = model_input.forecast_start
@@ -232,21 +234,98 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     mc_above_ref = etas_parameters.catalog["mc_current"] - \
         model_parameters["m_ref"]
 
+    etas_parameters.catalog["magnitude"] = round_half_up(
+        etas_parameters.catalog.magnitude / 0.2) * 0.2
+
     theta = parameter_dict2array(etas_parameters.theta)
     etas_parameters.catalog["xi_plus_1"] = responsibility_factor(
         theta,
         etas_parameters.beta,
         mc_above_ref
     )
+
+    # Run 1 step to assign ellipses to all events prior to simulation timewindow
+    etas_parameters.catalog["aspect_ratio"] = 1.0
+    etas_parameters.catalog["orientation"] = 0.0
+
+    if len(etas_parameters.catalog) > 0:
+        try:
+            etas_parameters.distances = etas_parameters.calculate_distances()
+            etas_parameters.target_events = etas_parameters.prepare_target_events()
+            etas_parameters.source_events = etas_parameters.prepare_source_events()
+
+            mc_min = model_parameters["m_ref"] - model_parameters["delta_m"] / 2
+            (
+                etas_parameters.pij,
+                etas_parameters.target_events,
+                etas_parameters.source_events,
+                etas_parameters.n_hat,
+                etas_parameters.i_hat,
+            ) = etas_parameters.expectation_step(theta, mc_min)
+
+            grouped = etas_parameters.pij.groupby('source_id')
+            aspect_ratios = {}
+            orientations = {}
+
+            for source, targets in grouped:
+                target_ids = targets['index']
+                Pij_values = targets['Pij'] * targets['zeta_plus_1']
+                afters = etas_parameters.catalog.loc[target_ids]
+                
+                if Pij_values.sum() > 1 and len(afters) > 3:
+                    
+                    x = afters['longitude']
+                    y = afters['latitude']
+                    min_pij = np.max([Pij_values.min(), 1e-10])
+                    w = Pij_values / min_pij
+                    w = w.astype(int)
+                    covariance_matrix = np.cov(x, y, fweights=w)
+                    val, vec = np.linalg.eigh(covariance_matrix)
+
+                    lam1, lam2 = np.sqrt(val[0]), np.sqrt(np.abs(val[1]))
+                    if lam1 != 0 and lam2 != 0:
+                        if lam1 > lam2:
+                            aspect_ratios[source] = (lam1 / lam2)
+                            orientations[source] = (np.arctan2(vec[1, 0] , vec[0, 0]))
+                        else:
+                            aspect_ratios[source] = (lam2 / lam1)
+                            orientations[source] = (np.arctan2(vec[1, 1] , vec[0, 1]))
+                    else:
+                        aspect_ratios[source] = 1.0
+                        orientations[source] = 0.0
+                else:
+                    aspect_ratios[source] = 1.0
+                    orientations[source] = 0.0
+
+            # Map values back to source_events
+            etas_parameters.source_events['aspect_ratio'] = etas_parameters.source_events.index.map(aspect_ratios)
+            etas_parameters.source_events['orientation'] = etas_parameters.source_events.index.map(orientations)
+
+            # Default to circle in case of NaN
+            etas_parameters.source_events['aspect_ratio'] = etas_parameters.source_events['aspect_ratio'].fillna(1.0)
+            etas_parameters.source_events['orientation'] = etas_parameters.source_events['orientation'].fillna(0.0)
+
+            updated_sources = etas_parameters.source_events
+            etas_parameters.catalog['aspect_ratio'] = updated_sources['aspect_ratio']
+            etas_parameters.catalog['orientation'] = updated_sources['orientation']
+
+        except ValueError as e:
+            if "No objects to concatenate" in str(e):
+                print("No highly clustered event pairs found; defaults stay as circles.")
+                pass 
+            else:
+                raise e
+
+    # Prepare catalogue for simulation
     etas_parameters.catalog = etas_parameters.catalog[["longitude",
                                                        "latitude",
                                                        "time",
                                                        "magnitude",
                                                        "mc_current",
-                                                       "xi_plus_1"]].copy()
+                                                       "xi_plus_1",
+                                                       "aspect_ratio",
+                                                       "orientation"]].copy()
 
-    etas_parameters.catalog["magnitude"] = round_half_up(
-        etas_parameters.catalog.magnitude / 0.2) * 0.2
     etas_parameters.source_events = etas_parameters.catalog
 
     # prepare background grid for simulation of locations
@@ -278,9 +357,10 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     simulation.polygon = wkt.loads(model_input.bounding_polygon)
 
     forecast_duration = model_input.forecast_end - model_input.forecast_start
+    simulation.catalog.to_csv("catalog_europe.csv")
 
     results = simulation.simulate_to_df(
-        forecast_duration.days, model_parameters['n_simulations'])
+        forecast_duration.days, model_parameters['n_simulations'], info_cols=["is_background", "parent_id"])
 
     # Add required additional columns and attributes
     results['depth'] = 0
