@@ -29,7 +29,7 @@ def main():
     min_latitude = 25
     max_latitude = 73
 
-    min_magnitude = 4.5
+    min_magnitude = 3.5
     url = 'https://www.seismicportal.eu/fdsnws/event/1/query'
     client = FDSNWSEventClient(url)
     catalog = client.get_events(
@@ -41,9 +41,11 @@ def main():
         min_latitude=min_latitude,
         max_latitude=max_latitude)
 
+    catalog = catalog.sort_values(by="time").reset_index(drop=True)
+
     polygon = Polygon(np.load('europe_shape.npy'))
 
-    forecast_duration = 30  # days
+    forecast_duration = 7  # days
 
     model_input = {
         'forecast_start': timewindow_end,
@@ -54,7 +56,7 @@ def main():
         'seismicity_observation': catalog.to_quakeml(),
         'model_parameters': {
             "theta_0": {},
-            "mc": 4.6,
+            "mc": 3.6,
             "m_ref": 3.6,
             "delta_m": 0.2,
             "coppersmith_multiplier": 100,
@@ -65,21 +67,22 @@ def main():
             "n_simulations": 100,
             "beta": 2.8414508,
             "theta": {
-                "log10_mu": -7.036605653217294,
-                "log10_k0": -1.9810161198259735,
-                "a": 3.393445580204645,
-                "log10_c": -2.3188629487442154,
-                "omega": -0.027169946471281122,
-                "log10_tau": 3.8028947342444486,
-                "log10_d": 0.698787394760153,
-                "gamma": 1.2242424408776438,
-                "rho": 0.8910493957656155
+                "log10_mu": -7.83721772631417,
+                "log10_k0": -1.606744850995688,
+                "a": 2.200463473795427,
+                "log10_c": -2.6019384720803362,
+                "omega": -0.09788518589288804,
+                "log10_tau": 3.6370349732014136,
+                "log10_d": 0.8331798021862536,
+                "gamma": 1.415898617123485,
+                "rho": 0.6981330484664455
             }
         }
     }
 
     results = entrypoint_europe(model_input)
     print(results[0])
+    results[0].to_csv("forecast_europe_ellipse.csv")
 
 
 if __name__ == "__main__":
