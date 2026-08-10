@@ -20,7 +20,7 @@ from seismostats import Catalog, ForecastCatalog
 from shapely import Polygon, wkt
 
 from etas.inversion import ETASParameterCalculation
-from etas.etas.simulation import ETASSimulation
+from etas.simulation import ETASSimulation
 
 
 @validate_entrypoint(induced=False)
