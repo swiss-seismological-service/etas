@@ -1,9 +1,9 @@
 import copy
+import math
 from importlib import resources
 
 import numpy as np
 import pandas as pd
-import math
 
 from etas.inversion import (parameter_dict2array, responsibility_factor,
                             round_half_up)
@@ -227,9 +227,11 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     model_input.bounding_polygon = wkt.dumps(Polygon(polygon))
 
     # Load ETAS inversion object but adjust to simulation properties
+    model_parameters['shape_coords'] = polygon
+    model_parameters['timewindow_end'] = model_input.forecast_start
+
     etas_parameters = ETASParameterCalculation(model_parameters)
 
-    etas_parameters.timewindow_end = model_input.forecast_start
     etas_parameters.catalog["mc_current"] = model_parameters["mc"]
     etas_parameters.theta = model_parameters["theta"]
     etas_parameters.m_ref = model_parameters["m_ref"]
@@ -251,13 +253,20 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     etas_parameters.catalog["orientation"] = 0.0
 
     def ar_max(x):
-        if x < 3: return 1
-        if x < 5: return 1.25
-        if x < 10: return 1.5
-        if x < 20: return 2
-        if x < 30: return 5
-        if x < 50: return 8
-        if x < 100: return 10 
+        if x < 3:
+            return 1
+        if x < 5:
+            return 1.25
+        if x < 10:
+            return 1.5
+        if x < 20:
+            return 2
+        if x < 30:
+            return 5
+        if x < 50:
+            return 8
+        if x < 100:
+            return 10
         return 10
 
     if len(etas_parameters.catalog) > 0:
@@ -266,7 +275,8 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
             etas_parameters.target_events = etas_parameters.prepare_target_events()
             etas_parameters.source_events = etas_parameters.prepare_source_events()
 
-            mc_min = model_parameters["m_ref"] - model_parameters["delta_m"] / 2
+            mc_min = model_parameters["m_ref"] - \
+                model_parameters["delta_m"] / 2
             (
                 etas_parameters.pij,
                 etas_parameters.target_events,
@@ -283,9 +293,9 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
                 target_ids = targets['index']
                 Pij_values = targets['Pij'] * targets['zeta_plus_1']
                 afters = etas_parameters.catalog.loc[target_ids]
-                
+
                 if Pij_values.sum() > 1 and len(afters) > 3:
-                    
+
                     x = afters['longitude']
                     y = afters['latitude']
                     min_pij = np.max([Pij_values.min(), 1e-10])
@@ -298,13 +308,16 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
                     if lam1 != 0 and lam2 != 0:
                         if lam1 > lam2:
                             aspect_ratios[source] = (lam1 / lam2)
-                            orientations[source] = (np.arctan2(vec[1, 0] , vec[0, 0]))
+                            orientations[source] = (
+                                np.arctan2(vec[1, 0], vec[0, 0]))
                         else:
                             aspect_ratios[source] = (lam2 / lam1)
-                            orientations[source] = (np.arctan2(vec[1, 1] , vec[0, 1]))
+                            orientations[source] = (
+                                np.arctan2(vec[1, 1], vec[0, 1]))
 
                         # Cap aspect ratio at ar_max(n_potential_aftershocks)
-                        aspect_ratios[source] = max(aspect_ratios[source], ar_max(len(afters)))
+                        aspect_ratios[source] = max(
+                            aspect_ratios[source], ar_max(len(afters)))
                     else:
                         aspect_ratios[source] = 1.0
                         orientations[source] = 0.0
@@ -313,12 +326,16 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
                     orientations[source] = 0.0
 
             # Map values back to source_events
-            etas_parameters.source_events['aspect_ratio'] = etas_parameters.source_events.index.map(aspect_ratios)
-            etas_parameters.source_events['orientation'] = etas_parameters.source_events.index.map(orientations)
+            etas_parameters.source_events['aspect_ratio'] = etas_parameters.source_events.index.map(
+                aspect_ratios)
+            etas_parameters.source_events['orientation'] = etas_parameters.source_events.index.map(
+                orientations)
 
             # Default to circle in case of NaN
-            etas_parameters.source_events['aspect_ratio'] = etas_parameters.source_events['aspect_ratio'].fillna(1.0)
-            etas_parameters.source_events['orientation'] = etas_parameters.source_events['orientation'].fillna(0.0)
+            etas_parameters.source_events['aspect_ratio'] = etas_parameters.source_events['aspect_ratio'].fillna(
+                1.0)
+            etas_parameters.source_events['orientation'] = etas_parameters.source_events['orientation'].fillna(
+                0.0)
 
             updated_sources = etas_parameters.source_events
             etas_parameters.catalog['aspect_ratio'] = updated_sources['aspect_ratio']
@@ -327,7 +344,7 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
         except ValueError as e:
             if "No objects to concatenate" in str(e):
                 print("No highly clustered event pairs found; defaults stay as circles.")
-                pass 
+                pass
             else:
                 raise e
 
@@ -372,7 +389,7 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     simulation.polygon = wkt.loads(model_input.bounding_polygon)
 
     forecast_duration = model_input.forecast_end - model_input.forecast_start
-    #simulation.catalog.to_csv("catalog_europe.csv")
+    # simulation.catalog.to_csv("catalog_europe.csv")
 
     results = simulation.simulate_to_df(
         forecast_duration.days, model_parameters['n_simulations'], info_cols=["is_background", "parent_id"])
