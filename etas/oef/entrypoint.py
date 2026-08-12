@@ -372,7 +372,7 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     simulation.polygon = wkt.loads(model_input.bounding_polygon)
 
     forecast_duration = model_input.forecast_end - model_input.forecast_start
-    simulation.catalog.to_csv("catalog_europe.csv")
+    #simulation.catalog.to_csv("catalog_europe.csv")
 
     results = simulation.simulate_to_df(
         forecast_duration.days, model_parameters['n_simulations'], info_cols=["is_background", "parent_id"])
