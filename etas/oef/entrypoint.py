@@ -223,9 +223,11 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     polygon[:, [0, 1]] = polygon[:, [1, 0]]
     model_input.bounding_polygon = wkt.dumps(Polygon(polygon))
 
+    model_parameters['shape_coords'] = polygon
+    model_parameters['timewindow_end'] = model_input.forecast_start
+
     etas_parameters = ETASParameterCalculation(model_parameters)
 
-    etas_parameters.timewindow_end = model_input.forecast_start
     etas_parameters.catalog["mc_current"] = model_parameters["mc"]
     etas_parameters.theta = model_parameters["theta"]
     etas_parameters.m_ref = model_parameters["m_ref"]
