@@ -80,7 +80,7 @@ def main():
 
     results = entrypoint_europe(model_input)
     print(results[0])
-    results[0].to_csv("forecast_europe_ellipse.csv")
+    #results[0].to_csv("forecast_europe_ellipse.csv")
 
 
 if __name__ == "__main__":
