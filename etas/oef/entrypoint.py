@@ -214,6 +214,8 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     # Prepare seismic data from QuakeML
     catalog = Catalog.from_quakeml(model_input.seismicity_observation)
 
+    catalog = catalog.sort_values(by="time").reset_index(drop=True)
+
     # Prepare model input
     model_parameters = \
         model_input.model_parameters | model_input.model_settings
@@ -247,6 +249,16 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
     # Run 1 step to assign ellipses to all events prior to simulation timewindow
     etas_parameters.catalog["aspect_ratio"] = 1.0
     etas_parameters.catalog["orientation"] = 0.0
+
+    def ar_max(x):
+        if x < 3: return 1
+        if x < 5: return 1.25
+        if x < 10: return 1.5
+        if x < 20: return 2
+        if x < 30: return 5
+        if x < 50: return 8
+        if x < 100: return 10 
+        return 10
 
     if len(etas_parameters.catalog) > 0:
         try:
@@ -290,6 +302,9 @@ def entrypoint_europe(model_input: ModelInput) -> list[ForecastCatalog]:
                         else:
                             aspect_ratios[source] = (lam2 / lam1)
                             orientations[source] = (np.arctan2(vec[1, 1] , vec[0, 1]))
+
+                        # Cap aspect ratio at ar_max(n_potential_aftershocks)
+                        aspect_ratios[source] = max(aspect_ratios[source], ar_max(len(afters)))
                     else:
                         aspect_ratios[source] = 1.0
                         orientations[source] = 0.0

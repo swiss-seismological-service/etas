@@ -41,8 +41,6 @@ def main():
         min_latitude=min_latitude,
         max_latitude=max_latitude)
 
-    catalog = catalog.sort_values(by="time").reset_index(drop=True)
-
     polygon = Polygon(np.load('europe_shape.npy'))
 
     forecast_duration = 7  # days
