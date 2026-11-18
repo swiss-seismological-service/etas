@@ -30,8 +30,20 @@ parameters and with a non-vanishing background rate are unaffected.
   `ValueError`, since these are derived from the event productivities.
 - Fixing alpha together with all of `a`, `rho` and `gamma` to inconsistent
   values raises a `ValueError`.
+- **Fixing `log10_tau` to infinity (no taper) now works.** Previously the
+  likelihood was NaN for every pair (silently skipped by the sum), so the
+  space-time distribution did not enter the fit: on the original code the
+  parameters stayed at their initial values. The normalization now uses its
+  limit for tau -> infinity, which requires `omega > 0` (enforced).
 
 ### Fixed
+
+- `ETASLikelihoodCalculation.store_results()` crashed with `NameError`
+  (missing `import os`) when called without `data_path`.
+- Integer initial values (e.g. `"log10_c": -3` in a JSON config) crashed
+  the inversion ("Integers to negative integer powers are not allowed");
+  integer fixed values above 18 overflowed.
+- `runnable_code/predict_etas.py` unpacked the scores dict into its keys.
 
 - **Free-productivity inversion (`free_productivity=True`) crashed** with
   `UnboundLocalError` in `expected_aftershocks_free_prod`. A formatting change
@@ -59,6 +71,9 @@ parameters and with a non-vanishing background rate are unaffected.
   `likelihood_term`) to the DataFrames passed to them. The `G` column of the
   source events is now set once after each optimization step. Stored results
   are unchanged.
+- `etas.evaluation`: reformatted and documented; results and printed
+  output are unchanged.
+- The whole package passes flake8, which is now enforced in CI.
 - Declared dependencies that were used but missing: `joblib`, `pyproj`. New
   extras: `plot` (matplotlib, needed by `etas.plots`) and `test`.
 - Replaced deprecated pandas usage (`inplace=True`, the `"d"` time unit). This
@@ -66,6 +81,11 @@ parameters and with a non-vanishing background rate are unaffected.
   working with pandas 4.
 
 ### Added
+
+- Documentation site (mkdocs, `docs/`): quickstart, model, configuration
+  reference, API reference generated from the docstrings. Build with
+  `pip install -e ".[docs]"` and `mkdocs serve`. All public functions and
+  classes now have docstrings, with units.
 
 - Test suite (`pytest`), inversion benchmark (`benchmarks/`) and continuous
   integration (`.github/workflows/tests.yml`).

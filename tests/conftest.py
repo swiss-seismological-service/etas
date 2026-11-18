@@ -34,6 +34,14 @@ FULL_INVERSION_CONFIG = dict(
     id="full",
 )
 
+# Inversion on 1981-1984, evaluation on 1984-1986 (etas.evaluation).
+EVALUATION_CONFIG = dict(
+    SHORT_INVERSION_CONFIG,
+    timewindow_end="1984-01-01 00:00:00",
+    testwindow_end="1986-01-01 00:00:00",
+    id="evaluation",
+)
+
 
 def pytest_configure(config):
     config.addinivalue_line(

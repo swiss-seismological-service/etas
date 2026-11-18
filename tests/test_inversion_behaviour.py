@@ -122,3 +122,47 @@ def test_free_productivity_with_fixed_parameters():
     assert theta["omega"] == -0.1
     assert theta["rho"] == 0.6
     assert np.isfinite(theta["a"]) and np.isfinite(theta["log10_k0"])
+
+
+# --- no taper (log10_tau = inf) --------------------------------------------
+
+def test_likelihood_continuous_without_taper():
+    from etas.inversion import neg_log_likelihood
+    calc, _ = _invert(THREE_YEARS, max_iterations=1)
+    mc = calc.m_ref - calc.delta_m / 2
+
+    def nll(log10_tau):
+        theta = [-2.6, 1.8, -2.5, 0.1, log10_tau, -0.85, 1.3, 0.66]
+        return neg_log_likelihood(theta, calc.pij, calc.source_events, mc)
+
+    assert np.isfinite(nll(np.inf))
+    # convergence to the limit is slow (~ tau^-omega), so compare with a
+    # very large tau
+    assert nll(np.inf) == pytest.approx(nll(200.0), rel=1e-6)
+    assert nll(20.0) < nll(30.0) < nll(np.inf)
+
+
+@pytest.mark.slow
+def test_fixed_infinite_tau_matches_very_large_tau():
+    _, theta_inf = _invert(THREE_YEARS, fixed_parameters={
+        "log10_tau": np.inf, "omega": 0.1})
+    _, theta_large = _invert(THREE_YEARS, fixed_parameters={
+        "log10_tau": 200, "omega": 0.1})
+    assert theta_inf["log10_tau"] == np.inf
+    for name in ["log10_mu", "log10_k0", "a", "log10_c", "log10_d",
+                 "gamma", "rho"]:
+        assert theta_inf[name] == pytest.approx(theta_large[name], abs=0.01)
+
+
+def test_infinite_tau_requires_positive_omega():
+    calc = ETASParameterCalculation(dict(THREE_YEARS, fixed_parameters={
+        "log10_tau": np.inf, "omega": -0.1}))
+    with pytest.raises(ValueError, match="omega > 0"):
+        calc.prepare()
+
+
+def test_integer_initial_values():
+    """Integer values, e.g. from a JSON config, must not break np.power."""
+    theta_0 = dict(THREE_YEARS["theta_0"], log10_c=-3, log10_tau=4)
+    calc, theta = _invert(THREE_YEARS, theta_0=theta_0, max_iterations=2)
+    assert np.isfinite(theta["log10_c"])

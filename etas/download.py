@@ -1,3 +1,4 @@
+"""Download of earthquake catalogs."""
 import datetime as dt
 import urllib.request
 import urllib.parse
@@ -12,6 +13,27 @@ def download_catalog_sed(
     minmagnitude=0.01,
     delta_m=0.1,
 ):
+    """Download the Swiss Seismological Service (SED) earthquake catalog.
+
+    Queries the FDSN event web service of ETH Zurich.
+
+    Parameters
+    ----------
+    starttime : datetime, default 1970-01-01
+    endtime : datetime, optional
+        Default is the time of the call.
+    minmagnitude : float, default 0.01
+        Minimum (binned) magnitude; events from ``minmagnitude - delta_m / 2``
+        are requested.
+    delta_m : float, default 0.1
+        Magnitude bin size.
+
+    Returns
+    -------
+    pd.DataFrame
+        With columns time, latitude, longitude, depth, magnitude (and the
+        other columns of the service), sorted by time.
+    """
     if endtime is None:
         endtime = dt.datetime.now()
     print("downloading data..\n")

@@ -1,14 +1,46 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+r"""Inversion of ETAS parameters with the expectation-maximization algorithm.
 
-##############################################################################
-# inversion of ETAS parameters
-#
-# as described by Mizrahi et al., 2021
-# Leila Mizrahi, Shyam Nandan, Stefan Wiemer;
-# The Effect of Declustering on the Size Distribution of Mainshocks.
-# Seismological Research Letters 2021; doi: https://doi.org/10.1785/0220200231
-##############################################################################
+As described by Mizrahi et al. (2021), The Effect of Declustering on the
+Size Distribution of Mainshocks, Seismological Research Letters,
+https://doi.org/10.1785/0220200231, and, for time- and space-varying
+completeness, by Mizrahi et al. (2021), Embracing Data Incompleteness for
+Better Earthquake Forecasting, JGR Solid Earth, Section 3.1,
+https://doi.org/10.1029/2021JB022379.
+
+The model
+---------
+The conditional intensity at time *t* and location *x* is
+
+$$
+\lambda(t, x) = \mu + \sum_{i: t_i < t} g(m_i, t - t_i, |x - x_i|^2),
+$$
+
+with the triggering kernel
+
+$$
+g(m, t, r^2) = k_0 \, e^{a (m - m_c)}
+    \cdot \frac{e^{-t / \tau}}{(t + c)^{1 + \omega}}
+    \cdot \frac{1}{(r^2 + d \, e^{\gamma (m - m_c)})^{1 + \rho}},
+$$
+
+where $m_c$ is the reference magnitude of the kernel
+(``m_ref - delta_m / 2``) and magnitudes above it follow the
+Gutenberg-Richter law with parameter $\beta = b \ln 10$. Time is in
+days, distances in km (or ``space_unit_in_meters`` for 3D catalogs), so
+$\mu$ is a rate per day and km².
+
+Parameters are handled either as a dict or as an array ``theta`` in the
+order log10_mu, log10_iota, log10_k0, a, log10_c, omega, log10_tau,
+log10_d, gamma, rho (see `parameter_dict2array`); log10_iota is the
+rate of the optional additional background term (``bg_term``).
+
+Coordinates: regions and catalogs use (latitude, longitude) in degrees,
+in this order.
+
+Main entry point: `ETASParameterCalculation`.
+"""
 
 import datetime as dt
 import json
@@ -172,6 +204,20 @@ def coppersmith(mag, fault_type):
 
 
 def rectangle_surface(lat1, lat2, lon1, lon2):
+    """Area in km² of the lat/lon rectangle with the given corners.
+
+    Parameters
+    ----------
+    lat1, lat2 : float
+        Latitudes of two opposite corners, in degrees.
+    lon1, lon2 : float
+        Longitudes of two opposite corners, in degrees.
+
+    Returns
+    -------
+    float
+        Area in km², computed in an Albers equal-area projection.
+    """
     vertices = [[lat1, lon1], [lat2, lon1], [lat2, lon2], [lat1, lon2]]
     polygon = Polygon(vertices)
 
@@ -188,6 +234,20 @@ def rectangle_surface(lat1, lat2, lon1, lon2):
 
 
 def polygon_surface(polygon):
+    """Area in km² of a polygon on the Earth's surface.
+
+    Parameters
+    ----------
+    polygon : shapely.geometry.Polygon
+        Polygon with vertices given as (latitude, longitude) in degrees, the
+        convention used throughout the package.
+
+    Returns
+    -------
+    float
+        Area in km², computed in an Albers equal-area projection with
+        standard parallels at the polygon's latitude bounds.
+    """
     proj_wgs84 = pyproj.CRS('EPSG:4326')
     proj_aea = pyproj.CRS(
         proj="aea", lat_1=polygon.bounds[0], lat_2=polygon.bounds[2])
@@ -201,6 +261,22 @@ def polygon_surface(polygon):
 
 
 def in_hull(points, x):
+    """Whether point ``x`` lies inside the convex hull of ``points``.
+
+    Solved as a linear feasibility problem (is ``x`` a convex combination of
+    the points?), so it also works in 3D.
+
+    Parameters
+    ----------
+    points : np.ndarray, shape (n, k)
+        Points spanning the hull.
+    x : np.ndarray, shape (k,)
+        Point to test.
+
+    Returns
+    -------
+    bool
+    """
     n_points = len(points)
     c = np.zeros(n_points)
     A = np.r_[points.T, np.ones((1, n_points))]
@@ -210,6 +286,13 @@ def in_hull(points, x):
 
 
 def hav(theta):
+    """Haversine of an angle, ``sin²(theta / 2)``.
+
+    Parameters
+    ----------
+    theta : float or np.ndarray
+        Angle in radians.
+    """
     return np.square(np.sin(theta / 2))
 
 
@@ -236,6 +319,22 @@ def haversine(lat_rad_1,
 
 
 def branching_integral(alpha_minus_beta, dm_max=None):
+    """Integral of ``exp((alpha - beta) * m)`` over magnitudes above the
+    reference magnitude.
+
+    Parameters
+    ----------
+    alpha_minus_beta : float
+        ``alpha - beta``, where ``alpha = a - rho * gamma``.
+    dm_max : float, optional
+        Upper integration limit, as magnitude above the reference magnitude.
+        If None, the integral goes to infinity, which requires
+        ``alpha < beta``.
+
+    Returns
+    -------
+    float
+    """
     if dm_max is None:
         assert alpha_minus_beta < 0, (
             "for unlimited magnitudes, " "alpha minus beta has to be negative"
@@ -249,6 +348,29 @@ def branching_integral(alpha_minus_beta, dm_max=None):
 
 
 def branching_ratio(theta, beta, dm_max=None):
+    """Branching ratio: expected number of direct aftershocks per event.
+
+    Averaged over a Gutenberg-Richter distribution of source magnitudes with
+    parameter ``beta``, integrated over all space and time.
+
+    Parameters
+    ----------
+    theta : array-like
+        Parameters in the order of ``parameter_dict2array``
+        (log10_mu, log10_iota, log10_k0, a, log10_c, omega, log10_tau,
+        log10_d, gamma, rho).
+    beta : float
+        Gutenberg-Richter parameter in natural-log units
+        (``beta = b * ln(10)``).
+    dm_max : float, optional
+        Maximum magnitude above the reference magnitude. If None, magnitudes
+        are unbounded, which requires ``alpha = a - rho * gamma < beta``.
+
+    Returns
+    -------
+    float
+        The branching ratio; values >= 1 mean a supercritical process.
+    """
     (
         log10_mu,
         log10_iota,
@@ -281,10 +403,41 @@ def branching_ratio(theta, beta, dm_max=None):
 
 
 def to_days(timediff):
+    """Convert a time difference to (fractional) days.
+
+    Parameters
+    ----------
+    timediff : datetime.timedelta, pd.Timedelta or pd.Series of timedeltas
+
+    Returns
+    -------
+    float or pd.Series
+    """
     return timediff / dt.timedelta(days=1)
 
 
 def upper_gamma_ext(a, x):
+    r"""Upper incomplete gamma function, extended to non-positive ``a``.
+
+    $$
+    \Gamma(a, x) = \int_x^\infty t^{a - 1} e^{-t} \, dt
+    $$
+
+    For ``a > 0`` this is ``gammaincc(a, x) * gamma(a)``, for ``a = 0`` the
+    exponential integral ``E1(x)``, and for ``a < 0`` it is obtained by the
+    recurrence ``Gamma(a, x) = (Gamma(a + 1, x) - x^a e^-x) / a``.
+
+    Parameters
+    ----------
+    a : float
+        Shape parameter (any real number).
+    x : float or np.ndarray
+        Lower integration limit, ``x > 0``.
+
+    Returns
+    -------
+    float or np.ndarray
+    """
     if a > 0:
         return gammaincc(a, x) * gamma_func(a)
     elif a == 0:
@@ -294,6 +447,20 @@ def upper_gamma_ext(a, x):
 
 
 def parameter_array2dict(theta):
+    """Convert an array of ETAS parameters to a dict.
+
+    Parameters
+    ----------
+    theta : array-like
+        Parameters in the order log10_mu, log10_iota, log10_k0, a, log10_c,
+        omega, log10_tau, log10_d, gamma, rho. If it has 11 entries, the first
+        one is ``alpha``.
+
+    Returns
+    -------
+    dict
+        Parameter name -> value.
+    """
     if len(theta) > 10:
         return dict(
             zip(
@@ -334,6 +501,22 @@ def parameter_array2dict(theta):
 
 
 def parameter_dict2array(parameters):
+    """Convert a dict of ETAS parameters to an array.
+
+    Inverse of `parameter_array2dict`. Missing parameters become
+    ``None``; if ``"alpha"`` is a key, it is the first entry.
+
+    Parameters
+    ----------
+    parameters : dict
+        Parameter name -> value.
+
+    Returns
+    -------
+    np.ndarray
+        Values in the order log10_mu, log10_iota, log10_k0, a, log10_c, omega,
+        log10_tau, log10_d, gamma, rho (preceded by alpha if given).
+    """
     order = [
         "log10_mu",
         "log10_iota",
@@ -354,6 +537,17 @@ def parameter_dict2array(parameters):
 
 
 def create_initial_values(ranges=RANGES):
+    """Random initial parameter values, uniformly within ``ranges``.
+
+    Parameters
+    ----------
+    ranges : sequence of (low, high)
+        One range per parameter, in the order of ``parameter_dict2array``.
+
+    Returns
+    -------
+    list of float
+    """
     return [np.random.uniform(*r) for r in ranges]
 
 
@@ -399,6 +593,29 @@ def triggering_kernel(metrics, params):
 
 
 def responsibility_factor(theta, beta, delta_mc):
+    """Correction for triggering by undetected events (varying completeness).
+
+    An event observed above its local completeness ``mc_i`` stands for all
+    events between ``m_ref`` and ``mc_i`` that were not detected. This factor,
+    ``1 + xi = exp(-(a - beta - gamma * rho) * delta_mc)``, is the ratio of the
+    triggering by all events above ``m_ref`` to the triggering by those
+    observed (Mizrahi et al. 2021, JGR, Sect. 3.1).
+
+    Parameters
+    ----------
+    theta : array-like
+        Parameters in the order of ``parameter_dict2array``.
+    beta : float
+        Gutenberg-Richter parameter (natural-log units).
+    delta_mc : float or array-like
+        Completeness of the source event above ``m_ref``,
+        ``mc_current - m_ref``.
+
+    Returns
+    -------
+    float or array-like
+        ``1 + xi``; equal to 1 where ``delta_mc = 0``.
+    """
     (
         log10_mu,
         log10_iota,
@@ -418,11 +635,56 @@ def responsibility_factor(theta, beta, delta_mc):
 
 
 def observation_factor(beta, delta_mc):
+    """Number of events above ``m_ref`` per event observed above
+    ``mc_current``.
+
+    ``1 + zeta = exp(beta * delta_mc)``, from the Gutenberg-Richter law
+    (Mizrahi et al. 2021, JGR, Sect. 3.1).
+
+    Parameters
+    ----------
+    beta : float
+        Gutenberg-Richter parameter (natural-log units).
+    delta_mc : float or array-like
+        Completeness above the reference magnitude,
+        ``mc_current - m_ref``.
+
+    Returns
+    -------
+    float or array-like
+    """
     zeta_plus_1 = np.exp(beta * delta_mc)
     return zeta_plus_1
 
 
 def expected_aftershocks(event, params, no_start=False, no_end=False):
+    """Expected number of aftershocks of events within a time window.
+
+    Integral of the triggering kernel over the whole plane and over the time
+    window, for events with productivity ``k0 * exp(a * (m - mc))``.
+
+    Parameters
+    ----------
+    event : list
+        ``[magnitude, time_to_start, time_to_end]``: source magnitudes, and the
+        time in days from the source to the start and to the end of the window
+        (``time_to_start`` is 0 for sources inside the window). With
+        ``no_start=True`` the ``time_to_start`` entry is omitted (integration
+        from the source time), with ``no_end=True`` the ``time_to_end`` entry
+        (integration to infinity). Entries may be arrays or pandas Series.
+    params : list
+        ``[theta, mc]``, where ``theta`` holds the eight parameters log10_k0,
+        a, log10_c, omega, log10_tau, log10_d, gamma, rho, and ``mc`` is the
+        reference magnitude of the kernel (``m_ref - delta_m / 2`` in the
+        inversion).
+    no_start, no_end : bool
+        See ``event``.
+
+    Returns
+    -------
+    float or array-like
+        Expected number of aftershocks per source event.
+    """
     theta, mc = params
 
     log10_k0, a, log10_c, omega, log10_tau, log10_d, gamma, rho = theta
@@ -477,7 +739,37 @@ def expected_aftershocks(event, params, no_start=False, no_end=False):
     return number_factor * area_factor * time_factor
 
 
+def _log_time_normalization(c, omega, tau):
+    """Log of the normalization of the time kernel.
+
+    ``-log(int_0^inf exp(-t / tau) (t + c)^-(1 + omega) dt)`` minus
+    ``omega * log(tau)`` cancelled against ``exp(c / tau)``, i.e.
+    ``omega * log(tau) - log(Gamma(-omega, c / tau))``. Without a taper
+    (``tau = inf``) this is the limit ``log(omega) + omega * log(c)``, which
+    requires ``omega > 0``.
+    """
+    if np.isinf(tau):
+        return np.log(omega) + omega * np.log(c)
+    return omega * np.log(tau) - np.log(upper_gamma_ext(-omega, c / tau))
+
+
 def ll_aftershock_term(l_hat, g):
+    """Poisson log-likelihood of the expected number of aftershocks.
+
+    ``l_hat * log(g) - g - log(l_hat!)``, with ``log(0)`` replaced by -300.
+
+    Parameters
+    ----------
+    l_hat : array-like
+        Estimated number of aftershocks per source (from the expectation step).
+    g : array-like
+        Expected number of aftershocks per source under the current
+        parameters (see `expected_aftershocks`).
+
+    Returns
+    -------
+    array-like
+    """
     mask = g != 0
     term = -1 * gammaln(l_hat + 1) - g
     term = term + l_hat * np.where(mask, np.log(g), -300)
@@ -485,6 +777,35 @@ def ll_aftershock_term(l_hat, g):
 
 
 def neg_log_likelihood(theta, Pij, source_events, mc_min):
+    """Objective of the maximization step: negative expected complete-data
+    log-likelihood of the triggering parameters.
+
+    Sum of the Poisson log-likelihood of the number of aftershocks per source
+    (`ll_aftershock_term`) and of the space-time distribution of the
+    aftershocks, weighted by the triggering probabilities ``Pij``. The
+    background rate is estimated separately, in closed form.
+
+    Parameters
+    ----------
+    theta : array-like
+        The eight parameters log10_k0, a, log10_c, omega, log10_tau,
+        log10_d, gamma, rho.
+    Pij : pd.DataFrame
+        Output of the expectation step, indexed by
+        (``source_id``, ``target_id``), with columns ``Pij``, ``zeta_plus_1``,
+        ``time_distance``, ``spatial_distance_squared``, ``source_magnitude``.
+    source_events : pd.DataFrame
+        Indexed by ``source_id``, with columns ``l_hat``,
+        ``source_magnitude``, ``pos_source_to_start_time_distance``,
+        ``source_to_end_time_distance``.
+    mc_min : float
+        Reference magnitude of the kernel, ``m_ref - delta_m / 2``.
+
+    Returns
+    -------
+    float
+        The inputs are not modified.
+    """
     assert Pij.index.names == ("source_id", "target_id"), logger.error(
         'Pij must have multiindex with names "source_id", "target_id"'
     )
@@ -512,8 +833,7 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
     # space time distribution term
     likelihood_term = (
         (
-            omega * np.log(tau)
-            - np.log(upper_gamma_ext(-omega, c / tau))
+            _log_time_normalization(c, omega, tau)
             + np.log(rho)
             + rho * np.log(d * np.exp(gamma
                            * (Pij["source_magnitude"] - mc_min)))
@@ -539,6 +859,27 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
 
 def expected_aftershocks_free_prod(
         event, params, no_start=False, no_end=False):
+    """Expected number of aftershocks in free-productivity mode.
+
+    Like `expected_aftershocks`, but the productivity of each source is
+    its own value ``kappa`` instead of ``k0 * exp(a * (m - mc))``.
+
+    Parameters
+    ----------
+    event : list
+        ``[magnitude, kappa, time_to_start, time_to_end]``; ``time_to_start``
+        is omitted with ``no_start=True``, ``time_to_end`` with
+        ``no_end=True``.
+    params : list
+        ``[theta, mc]``, where ``theta`` holds the six parameters log10_c,
+        omega, log10_tau, log10_d, gamma, rho.
+    no_start, no_end : bool
+        See `expected_aftershocks`.
+
+    Returns
+    -------
+    float or array-like
+    """
     theta, mc = params
 
     log10_c, omega, log10_tau, log10_d, gamma, rho = theta
@@ -595,6 +936,27 @@ def neg_log_likelihood_free_prod(
     beta,
     mc_min,
 ):
+    """Objective of the maximization step in free-productivity mode.
+
+    Only the space-time distribution of the aftershocks enters (weighted by
+    the triggering probabilities); the productivities are updated separately
+    (see `ETASParameterCalculation.update_source_kappa`).
+
+    Parameters
+    ----------
+    theta : array-like
+        The six parameters log10_c, omega, log10_tau, log10_d, gamma, rho.
+    n_hat, source_events, timewindow_length, timewindow_start, area, beta
+        Not used; kept for backwards compatibility of the signature.
+    Pij : pd.DataFrame
+        As in `neg_log_likelihood`.
+    mc_min : float
+        Reference magnitude of the kernel, ``m_ref - delta_m / 2``.
+
+    Returns
+    -------
+    float
+    """
     assert Pij.index.names == (
         "source_id",
         "target_id",
@@ -611,8 +973,7 @@ def neg_log_likelihood_free_prod(
     # space time distribution term
     likelihood_term = (
         (
-            omega * np.log(tau)
-            - np.log(upper_gamma_ext(-omega, c / tau))
+            _log_time_normalization(c, omega, tau)
             + np.log(rho)
             + rho * np.log(d * np.exp(gamma
                            * (Pij["source_magnitude"] - mc_min)))
@@ -637,6 +998,22 @@ def neg_log_likelihood_free_prod(
 
 
 def prod_neg_log_lik(a, args):
+    """Objective for estimating ``a`` from individual productivities.
+
+    Absolute value of the derivative with respect to ``a`` of the (weighted)
+    Poisson log-likelihood of ``kappa ~ k0 * exp(a * m_diff)``, with ``k0``
+    profiled out. Its minimum (zero) is the maximum-likelihood ``a``.
+
+    Parameters
+    ----------
+    a : float or array of one float
+    args : list
+        ``[kappa, m_diff, weights]``, see `calc_a_k0_from_kappa`.
+
+    Returns
+    -------
+    float
+    """
     sk, md, weights = args
     k_0 = np.sum(weights * sk) / (weights * np.exp(a * md)).sum()
     ll = (weights * md * (sk - k_0 * np.exp(a * md))).sum()
@@ -644,6 +1021,26 @@ def prod_neg_log_lik(a, args):
 
 
 def calc_a_k0_from_kappa(kappa, m_diff, weights=1):
+    """Fit the productivity law to individual productivities.
+
+    Finds ``a`` and ``k0`` such that ``kappa ≈ k0 * exp(a * m_diff)``, by
+    maximum likelihood (see `prod_neg_log_lik`); ``a`` is searched in
+    [0, 5].
+
+    Parameters
+    ----------
+    kappa : array-like
+        Productivity (expected number of direct aftershocks) per event.
+    m_diff : array-like
+        Magnitude above the reference magnitude, per event.
+    weights : array-like or float, default 1
+        Weight per event.
+
+    Returns
+    -------
+    tuple of float
+        ``(a, log10_k0)``.
+    """
     res = minimize(
         prod_neg_log_lik,
         x0=1.5,
@@ -657,6 +1054,23 @@ def calc_a_k0_from_kappa(kappa, m_diff, weights=1):
 
 
 def read_shape_coords(shape_coords):
+    """Read region coordinates from the different accepted formats.
+
+    Parameters
+    ----------
+    shape_coords : None, str or array-like
+        - None: no region (the whole globe).
+        - path to a ``.npy`` file with an array of shape (n, 2).
+        - a string representation of the coordinates, e.g. as written to
+          ``parameters_<id>.json`` by ``store_results``. It is evaluated with
+          ``eval``, so it must come from a trusted source.
+        - an array-like of (latitude, longitude) pairs (or (x, y, z) points
+          for 3D inversions).
+
+    Returns
+    -------
+    np.ndarray or None
+    """
     if shape_coords is None:
         return None
     if isinstance(shape_coords, str):
@@ -673,6 +1087,19 @@ def read_shape_coords(shape_coords):
 
 
 def calc_diff_to_before(a, b):
+    """Sum of absolute differences between two parameter vectors.
+
+    Entries that are None or infinite in either vector are skipped.
+
+    Parameters
+    ----------
+    a, b : array-like
+        Parameter vectors of equal length.
+
+    Returns
+    -------
+    float
+    """
     assert len(a) == len(b), "a and b must have the same length."
 
     return np.sum(
@@ -694,8 +1121,14 @@ def calc_diff_to_before(a, b):
 class ETASParameterCalculation:
     def __init__(self, metadata: dict):
         """
-        Class to invert ETAS parameters.
+        Estimate ETAS parameters from an earthquake catalog.
 
+        Usage:
+
+            calc = ETASParameterCalculation(metadata)
+            calc.prepare()
+            parameters = calc.invert()
+            calc.store_results("output/", store_pij=True)
 
         Parameters
         ----------
@@ -741,10 +1174,12 @@ class ETASParameterCalculation:
             - shape_coords: Coordinates of the boundary of the region to
                     consider, or path to a .npy file containing the coordinates
                     (list of lists, i.e. ``[[lat1, lon1], [lat2, lon2],
-                    [lat3, lon3]]``). Necessary unless globe=True when calling
-                    invert_etas_params(), i.e. `invert_etas_params(
-                    inversion_config, globe=True)`. In this case, the whole
-                    globe is considered.
+                    [lat3, lon3]]``). If None, the whole globe is
+                    considered.
+            - inner_shape_coords: optional, a region inside shape_coords.
+                    Only events inside it are targets; all events inside
+                    shape_coords can be sources. Default is None (same as
+                    shape_coords).
             - beta: optional. If provided, beta will be fixed to this value.
                     If set to 'positive', beta will be estimated using the
                     b-positive method. Default is None.
@@ -769,7 +1204,25 @@ class ETASParameterCalculation:
                 default: False
             - bw_sq: optional, squared bandwidth of Gaussian kernel used for
                     free_background/free_productivity mode
-                default: 2
+                default: 1
+            - fixed_parameters: optional, dict of parameters that are not
+                    estimated but fixed to the given value, e.g.
+                    ``{"omega": -0.1, "log10_tau": 4}``. Any parameter of
+                    theta can be fixed, including log10_mu. Additionally,
+                    ``"alpha"`` (= a - rho * gamma) can be fixed to a value
+                    or to ``"beta"``. Values outside the default range
+                    (``RANGES``) are used as given, with a warning. In
+                    free_productivity mode, log10_k0, a and alpha cannot be
+                    fixed. Default is None.
+            - bg_term: optional, name of a catalog column with a covariate
+                    (e.g. injection rate) that drives an additional
+                    background term with rate log10_iota (needs an initial
+                    value for log10_iota in theta_0). Default is None.
+            - max_iterations: optional, maximum number of EM iterations
+                    (None for no limit). Default is 1000.
+            - earth_radius: optional, in km. Default is 6378.1.
+            - testwindow_end: optional, end of the test window, used by
+                    ``etas.evaluation``.
             - name: optional, give the model a name
             - id: optional, give the model an ID
         """
@@ -811,7 +1264,8 @@ class ETASParameterCalculation:
         self.timewindow_end = pd.to_datetime(metadata["timewindow_end"])
         try:
             self.testwindow_end = pd.to_datetime(metadata["testwindow_end"])
-        except BaseException:
+        except (KeyError, TypeError, ValueError):
+            # testwindow_end is optional (only needed for evaluation)
             self.testwindow_end = None
 
         self.timewindow_length = to_days(
@@ -872,6 +1326,24 @@ class ETASParameterCalculation:
 
     @classmethod
     def load_calculation(cls, metadata: dict):
+        """Recreate a calculation from stored results.
+
+        Parameters
+        ----------
+        metadata : dict
+            Content of the ``parameters_<id>.json`` file written by
+            `store_results`. The catalog is reloaded (from
+            ``fn_catalog``) and filtered; source events, target events,
+            ``Pij`` and distances are reloaded if their file names
+            (``fn_src``, ``fn_ip``, ``fn_pij``, ``fn_dist``) are in
+            ``metadata``.
+
+        Returns
+        -------
+        ETASParameterCalculation
+            With ``preparation_done`` and ``inversion_done`` set, and the
+            parameters in ``theta``.
+        """
         obj = cls.__new__(cls)
 
         obj.logger = logging.getLogger(__name__)
@@ -998,6 +1470,14 @@ class ETASParameterCalculation:
         return obj
 
     def prepare(self):
+        """Prepare the data for the inversion.
+
+        Filters the catalog (time window, region, completeness), sets
+        initial parameter values (random within ``RANGES`` if ``theta_0`` was
+        not given), calculates the distances between possibly related events,
+        prepares source and target events, estimates ``beta`` (unless fixed),
+        and sets up fixed parameters. Does nothing if already prepared.
+        """
         if self.preparation_done:
             self.logger.warning("Preparation already done, aborting...")
             return
@@ -1079,6 +1559,8 @@ class ETASParameterCalculation:
         fixed = {k: v for k, v in self.fixed_parameters.items()
                  if v is not None}
         alpha = fixed.pop("alpha", None)
+        # e.g. JSON integers: np.power(10, 25) overflows for int
+        fixed = {k: float(v) for k, v in fixed.items()}
 
         if self.free_productivity:
             derived = {"log10_k0", "a"} & set(fixed)
@@ -1104,6 +1586,12 @@ class ETASParameterCalculation:
             # start from the fixed value, so that the first expectation step
             # is already consistent with it
             self.__theta_0[idx] = value
+        if np.isinf(fixed.get("log10_tau", 0)) and \
+                fixed.get("omega", 1) <= 0:
+            raise ValueError(
+                "Without taper (log10_tau = inf), the time kernel can only "
+                "be normalized for omega > 0; omega is fixed to {}".format(
+                    fixed["omega"]))
         self._fixed_values = fixed
         self.logger.info("  fixed parameters: {}".format(fixed))
 
@@ -1163,6 +1651,10 @@ class ETASParameterCalculation:
 
     @theta_0.setter
     def theta_0(self, t):
+        if t is not None:
+            # integers (e.g. from JSON) would break np.power(10, -3)
+            t = {k: float(v) if isinstance(v, (int, float)) else v
+                 for k, v in t.items()}
         self.__theta_0 = parameter_dict2array(t) if t is not None else None
 
     @property
@@ -1190,8 +1682,24 @@ class ETASParameterCalculation:
         self.__theta = parameter_dict2array(t) if t is not None else None
 
     def invert(self):
-        """
-        Invert the ETAS (or flETAS) parameters.
+        """Estimate the ETAS parameters with the expectation-maximization
+        algorithm.
+
+        Alternates between the expectation step (probabilities ``Pij`` that
+        event *i* triggered event *j*, and the expected number of background
+        events) and the maximization step (parameters given those
+        probabilities), until the parameters change by less than
+        ``CONVERGENCE_TOLERANCE`` (see `_convergence_difference`) or
+        ``max_iterations`` is reached. Requires `prepare`.
+
+        Returns
+        -------
+        dict
+            The estimated parameters (``self.theta``). Afterwards,
+            ``self.pij``, ``self.source_events``, ``self.target_events``,
+            ``self.n_hat`` (expected number of background events) and
+            ``self.i`` (number of iterations) hold the results of the last
+            expectation step.
         """
 
         if self.inversion_done:
@@ -1245,7 +1753,9 @@ class ETASParameterCalculation:
             try:
                 br = branching_ratio(theta_old, self.beta)
                 self.logger.debug("    branching ratio: {}".format(br))
-            except BaseException:
+            except Exception:
+                # e.g. alpha >= beta (infinite branching ratio), or a and
+                # log10_k0 not yet known in free-productivity mode
                 self.logger.debug("    branching ratio not calculated")
             theta_old = self.__theta.copy()
             if self.free_productivity:
@@ -1273,6 +1783,27 @@ class ETASParameterCalculation:
         return self.theta
 
     def filter_catalog(self, catalog):
+        """Select the events used in the inversion.
+
+        Keeps events with ``auxiliary_start <= time < timewindow_end`` inside
+        the region (``shape_coords``), rounds magnitudes to ``delta_m``, sets
+        the column ``mc_current`` (constant ``mc``, the given column for ``mc =
+        'var'``, or the previous magnitude + ``delta_m`` for ``mc =
+        'positive'``), and keeps events with ``magnitude >= mc_current``. Also
+        sets ``self.area`` (km², or the volume for 3D inversions) and, if
+        needed, lowers ``m_ref`` to the smallest ``mc_current``.
+
+        Parameters
+        ----------
+        catalog : pd.DataFrame
+            With columns ``latitude``, ``longitude`` (or ``x``, ``y``, ``z``),
+            ``time``, ``magnitude``.
+
+        Returns
+        -------
+        pd.DataFrame
+            The filtered catalog, sorted by time.
+        """
         len_full_catalog = catalog.shape[0]
 
         filtered_catalog = catalog.copy()
@@ -1380,6 +1911,16 @@ class ETASParameterCalculation:
         return filtered_catalog
 
     def prepare_target_events(self):
+        """Events that can be triggered: in the primary time window, inside
+        ``inner_shape_coords`` (if given), above completeness.
+
+        Returns
+        -------
+        pd.DataFrame
+            Indexed by ``target_id``, with the catalog columns plus
+            ``mc_current_above_ref`` (and ``bg_term``, normalized to a mean of
+            1, if ``bg_term`` is used).
+        """
         target_events = self.catalog.query("magnitude >= mc_current").copy()
         if self.inner_shape_coords is not None:
             inner_poly = Polygon(self.inner_shape_coords)
@@ -1409,6 +1950,17 @@ class ETASParameterCalculation:
         return target_events
 
     def prepare_source_events(self):
+        """Events that can trigger: all events above completeness, from
+        ``auxiliary_start`` on.
+
+        Returns
+        -------
+        pd.DataFrame
+            Indexed by ``source_id``, with columns ``source_magnitude``,
+            ``source_completeness_above_ref``, ``source_to_end_time_distance``
+            and ``pos_source_to_start_time_distance`` (days, 0 for sources
+            inside the primary window).
+        """
         source_columns = [
             "source_magnitude",
             "source_completeness_above_ref",
@@ -1433,6 +1985,26 @@ class ETASParameterCalculation:
         return sources[source_columns]
 
     def optimize_parameters(self, theta_0, ranges=RANGES):
+        """Maximization step: new parameters given the current ``Pij``.
+
+        The background rate is ``n_hat / (area * timewindow_length)`` (unless
+        fixed); the triggering parameters minimize `neg_log_likelihood`
+        (or `neg_log_likelihood_free_prod`) within ``ranges``. Fixed
+        parameters are not optimized but inserted with their fixed value.
+
+        Parameters
+        ----------
+        theta_0 : array-like
+            Current parameters (starting point), in the order of
+            ``parameter_dict2array``.
+        ranges : sequence of (low, high), default RANGES
+            Bounds per parameter.
+
+        Returns
+        -------
+        np.ndarray
+            New parameters, in the order of ``parameter_dict2array``.
+        """
         start_calc = dt.datetime.now()
 
         # estimate mu independently and remove from parameters
@@ -1445,9 +2017,14 @@ class ETASParameterCalculation:
                     self.i_hat / (self.area * self.timewindow_length)))
 
         # the optimizer only sees the parameters that are not fixed
-        first, _, free_idx = self._optimizer_layout()
+        first, names, free_idx = self._optimizer_layout()
         x0 = np.array(theta_0[first:], dtype=float)[free_idx]
         bounds = [ranges[first:][i] for i in free_idx]
+        if np.isinf(fixed.get("log10_tau", 0)) and "omega" not in fixed:
+            # without taper, the time kernel needs omega > 0
+            k = [names[i] for i in free_idx].index("omega")
+            bounds[k] = (max(bounds[k][0], 1e-3), bounds[k][1])
+            x0[k] = np.clip(x0[k], *bounds[k])
 
         def minimize_free(objective, args):
             if len(free_idx) == 0:
@@ -1513,6 +2090,29 @@ class ETASParameterCalculation:
 
     def store_results(
             self, data_path="", store_pij=False, store_distances=False):
+        """Write the results of the inversion to ``data_path``.
+
+        Files (``<id>`` is ``self.id``):
+
+        - ``parameters_<id>.json``: settings, estimated parameters and file
+          names; can be passed to `load_calculation` and
+          ``etas.evaluation.ETASLikelihoodCalculation``.
+        - ``trig_and_bg_probs_<id>.csv``: target events with background and
+          triggering probabilities.
+        - ``sources_<id>.csv``: source events with expected (``G``) and
+          estimated (``l_hat``) numbers of aftershocks.
+        - ``pij_<id>.csv`` (if ``store_pij``): triggering probabilities per
+          pair, needed for ``etas.plots``.
+        - ``distances_<id>.csv`` (if ``store_distances``).
+        - ``catalog_<id>.csv``, if the catalog was passed as a DataFrame.
+
+        Parameters
+        ----------
+        data_path : str, default ""
+            Directory, ending with a path separator; current directory if
+            empty.
+        store_pij, store_distances : bool, default False
+        """
         if data_path == "":
             data_path = os.getcwd() + "/"
 
@@ -1808,6 +2408,33 @@ class ETASParameterCalculation:
         return res_df
 
     def expectation_step(self, theta, mc_min):
+        """Expectation step: triggering and background probabilities.
+
+        For each pair of a possible source *i* and target *j*,
+        ``Pij = g_ij / (mu_j + sum_k g_kj * (1 + xi_k))``, where ``g`` is the
+        triggering kernel and ``1 + xi`` the `responsibility_factor`.
+        Summing over sources gives each target's probability of being triggered
+        or background; summing over targets gives each source's estimated
+        number of aftershocks ``l_hat``; both are scaled by the
+        `observation_factor` to account for undetected events.
+
+        Parameters
+        ----------
+        theta : array-like
+            Current parameters, in the order of ``parameter_dict2array``.
+        mc_min : float
+            Reference magnitude of the kernel, ``m_ref - delta_m / 2``.
+
+        Returns
+        -------
+        tuple
+            ``(Pij, target_events, source_events, n_hat, i_hat)``: the pair
+            table with columns ``gij``, ``Pij``, ``tot_rates``, ``xi_plus_1``,
+            ``zeta_plus_1``; target events with ``P_triggered``,
+            ``P_background`` (and ``P_induced``); source events with ``l_hat``;
+            the expected number of background events; and of induced events (0
+            without ``bg_term``).
+        """
         calc_start = dt.datetime.now()
         log10_mu = theta[0]
         mu = np.power(10, log10_mu)
@@ -1952,6 +2579,12 @@ class ETASParameterCalculation:
         return Pij_0, target_events_0, source_events_0, n_hat_0, i_hat_0
 
     def update_source_kappa(self):
+        """Update the individual productivities (free-productivity mode).
+
+        Fixed-point update ``kappa <- kappa * l_hat / G``, where ``G`` is the
+        expected number of aftershocks under the current kappa and ``l_hat``
+        the estimated number from the expectation step.
+        """
         self.source_events["G"] = expected_aftershocks_free_prod(
             [
                 self.source_events["source_magnitude"],
@@ -1971,6 +2604,11 @@ class ETASParameterCalculation:
         ).fillna(0)
 
     def calc_a_k0_from_kappa(self):
+        """Set ``a`` and ``log10_k0`` in ``theta`` by fitting the
+        productivity law to the individual productivities of the events in
+        the primary window (free-productivity mode). See
+        `calc_a_k0_from_kappa`.
+        """
         prim_mags = self.catalog.query(
             "time >=@self.timewindow_start")["magnitude"]
         kappas_estimated = pd.merge(

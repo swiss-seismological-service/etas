@@ -4,6 +4,7 @@ Run deliberately, and only when a change in behaviour is intended:
 
     python -m tests.generate_snapshots api      # public API snapshot
     python -m tests.generate_snapshots golden   # inversion golden values
+    python -m tests.generate_snapshots evaluation  # evaluation golden values
 
 Every regeneration of golden values must be explained in CHANGELOG.md.
 """
@@ -35,6 +36,31 @@ def golden_from_calc(calc):
     }
 
 
+def evaluation_scores(tmp_dir):
+    """Invert three years, evaluate on the following two (seeded)."""
+    import numpy as np
+    from etas.evaluation import ETASLikelihoodCalculation
+    from etas.inversion import ETASParameterCalculation
+    from tests.conftest import EVALUATION_CONFIG
+
+    np.random.seed(42)
+    calc = ETASParameterCalculation(dict(EVALUATION_CONFIG))
+    calc.prepare()
+    calc.invert()
+    calc.store_results(str(tmp_dir) + "/")
+    meta = json.loads(
+        (tmp_dir / "parameters_{}.json".format(calc.id)).read_text())
+    ev = ETASLikelihoodCalculation(meta)
+    ev.prepare(n=20000)
+    ev.evaluate_baseline_poisson_model()
+    scores = ev.evaluate()
+    return ev, {
+        "ETAS": {k: float(v) for k, v in scores.items()},
+        "Poisson": {k: float(v) for k, v in ev.Poisson_scores.items()},
+        "n_test_events": len(ev.indexes_in_test_window),
+    }
+
+
 def main(what):
     if what in ("api", "all"):
         with open(DATA / "public_api.json", "w") as f:
@@ -46,6 +72,14 @@ def main(what):
         calc.invert()
         with open(DATA / "golden_inversion_short.json", "w") as f:
             json.dump(golden_from_calc(calc), f, indent=1, sort_keys=True)
+
+    if what in ("evaluation", "all"):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            _, scores = evaluation_scores(Path(d))
+        with open(DATA / "golden_evaluation.json", "w") as f:
+            json.dump(scores, f, indent=1, sort_keys=True)
 
 
 if __name__ == "__main__":
