@@ -10,6 +10,8 @@ import datetime
 import importlib
 import inspect
 
+import numpy as np
+
 MODULES = [
     "etas",
     "etas.download",
@@ -39,6 +41,9 @@ def _default(value):
         return None
     if isinstance(value, datetime.datetime):
         return "<datetime>"
+    if isinstance(value, np.generic):
+        # numpy scalars: repr differs between numpy 1 and 2
+        value = value.item()
     return repr(value)
 
 

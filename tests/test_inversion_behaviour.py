@@ -166,3 +166,47 @@ def test_integer_initial_values():
     theta_0 = dict(THREE_YEARS["theta_0"], log10_c=-3, log10_tau=4)
     calc, theta = _invert(THREE_YEARS, theta_0=theta_0, max_iterations=2)
     assert np.isfinite(theta["log10_c"])
+
+
+def test_free_productivity_expected_aftershocks_without_taper():
+    """Without taper, the free-productivity helper equals the standard one
+    for kappa = k0 * exp(a * (m - mc)), and the limit of very large tau."""
+    import pandas as pd
+    from etas.inversion import (expected_aftershocks,
+                                expected_aftershocks_free_prod)
+    log10_k0, a, mc = -2.6, 1.8, 3.55
+    m = pd.Series([4.0, 5.0, 6.5])
+    t_start = pd.Series([0.0, 3.0, 0.0])
+    t_end = pd.Series([100.0, 1000.0, 10.0])
+    kappa = 10 ** log10_k0 * np.exp(a * (m - mc))
+    rest = [-2.5, 0.1, np.inf, -0.85, 1.3, 0.66]
+
+    free = expected_aftershocks_free_prod([m, kappa, t_start, t_end],
+                                          [rest, mc])
+    standard = expected_aftershocks([m, t_start, t_end],
+                                    [[log10_k0, a] + rest, mc])
+    assert np.all(np.isfinite(free))
+    np.testing.assert_allclose(free, standard, rtol=1e-12)
+
+    large_tau = list(rest)
+    large_tau[2] = 200.0
+    np.testing.assert_allclose(
+        free, expected_aftershocks_free_prod([m, kappa, t_start, t_end],
+                                             [large_tau, mc]), rtol=1e-6)
+    # integration to infinity / from the source time
+    assert np.all(np.isfinite(expected_aftershocks_free_prod(
+        [m, kappa], [rest, mc], no_start=True, no_end=True)))
+
+
+@pytest.mark.parametrize("value", [0, -1, 2.5, True])
+def test_invalid_max_iterations(value):
+    with pytest.raises(ValueError, match="max_iterations"):
+        ETASParameterCalculation(dict(THREE_YEARS, max_iterations=value))
+
+
+def test_fixed_background_rate_rejected_with_free_background():
+    calc = ETASParameterCalculation(dict(
+        THREE_YEARS, free_background=True,
+        fixed_parameters={"log10_mu": -7.0}))
+    with pytest.raises(ValueError, match="free_background"):
+        calc.prepare()

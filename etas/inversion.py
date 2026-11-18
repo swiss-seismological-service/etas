@@ -907,6 +907,15 @@ def expected_aftershocks_free_prod(
                          * (event_magnitude - mc)), -1 * rho) / rho
     )
 
+    if tau == np.inf:
+        # no taper: integral of (t + c)^-(1 + omega), requires omega > 0
+        start = c if no_start else event_time_to_start + c
+        time_factor = np.power(start, -omega) / omega
+        if not no_end:
+            time_factor = time_factor - \
+                np.power(event_time_to_end + c, -omega) / omega
+        return number_factor * area_factor * time_factor
+
     time_factor = np.exp(c / tau) * np.power(tau,
                                              - omega)  # * gamma_func(-omega)
 
@@ -1277,6 +1286,13 @@ class ETASParameterCalculation:
         self.bg_term = metadata.get("bg_term", None)
         self.max_iterations = metadata.get(
             "max_iterations", DEFAULT_MAX_ITERATIONS)
+        if self.max_iterations is not None and (
+                isinstance(self.max_iterations, bool)
+                or not float(self.max_iterations).is_integer()
+                or self.max_iterations < 1):
+            raise ValueError(
+                "max_iterations must be a positive integer or None, got "
+                "{!r}".format(self.max_iterations))
 
         self.logger.info(
             "  Time Window: \n      {} (aux start)\n      {} "
@@ -1559,6 +1575,12 @@ class ETASParameterCalculation:
         fixed = {k: v for k, v in self.fixed_parameters.items()
                  if v is not None}
         alpha = fixed.pop("alpha", None)
+        if self.free_background and "log10_mu" in fixed:
+            raise ValueError(
+                "log10_mu cannot be fixed with free_background=True: the "
+                "background rate is then estimated per event from the "
+                "background probabilities, and a fixed log10_mu would not "
+                "be used.")
         # e.g. JSON integers: np.power(10, 25) overflows for int
         fixed = {k: float(v) for k, v in fixed.items()}
 

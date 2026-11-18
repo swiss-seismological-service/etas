@@ -28,6 +28,8 @@ def region():
 
 @pytest.fixture(scope="module")
 def synthetic(region):
+    # module-scoped fixtures run before the per-test seeding in conftest
+    np.random.seed(42)
     return generate_catalog(
         polygon=region,
         timewindow_start=pd.to_datetime("2000-01-01"),

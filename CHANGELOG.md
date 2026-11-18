@@ -34,7 +34,14 @@ parameters and with a non-vanishing background rate are unaffected.
   likelihood was NaN for every pair (silently skipped by the sum), so the
   space-time distribution did not enter the fit: on the original code the
   parameters stayed at their initial values. The normalization now uses its
-  limit for tau -> infinity, which requires `omega > 0` (enforced).
+  limit for tau -> infinity, which requires `omega > 0` (enforced). This
+  also holds in free-productivity mode, where the expected numbers of
+  aftershocks were NaN and the productivities collapsed to zero.
+- `max_iterations` must be a positive integer or None (`0` used to return
+  no parameters while marking the inversion as done).
+- Fixing `log10_mu` together with `free_background=True` raises a
+  `ValueError`: the free background replaces the rate per event, so the
+  fixed value was reported but not used.
 
 ### Fixed
 
