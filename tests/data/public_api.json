@@ -287,6 +287,14 @@
    "kind": "constant",
    "value": "(0.01, 20)"
   },
+  "CONVERGENCE_TOLERANCE": {
+   "kind": "constant",
+   "value": "0.001"
+  },
+  "DEFAULT_MAX_ITERATIONS": {
+   "kind": "constant",
+   "value": "1000"
+  },
   "ETASParameterCalculation": {
    "kind": "class",
    "methods": {

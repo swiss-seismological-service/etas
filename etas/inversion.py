@@ -58,6 +58,47 @@ RANGES = (
     RHO_RANGE,
 )
 
+# order of the parameters in theta (the array form of the parameters)
+_PARAMETER_NAMES = (
+    "log10_mu",
+    "log10_iota",
+    "log10_k0",
+    "a",
+    "log10_c",
+    "omega",
+    "log10_tau",
+    "log10_d",
+    "gamma",
+    "rho",
+)
+
+# the EM algorithm stops when the parameters change by less than this
+CONVERGENCE_TOLERANCE = 0.001
+DEFAULT_MAX_ITERATIONS = 1000
+
+
+def _convergence_difference(theta_old, theta_new, volume_time):
+    """Change between two EM iterations, used as stopping criterion.
+
+    Sum of absolute changes of all parameters, as ``calc_diff_to_before``.
+    For the background rates (log10_mu, log10_iota), the change is the
+    smaller of the change in log10 and the change in the expected *number*
+    of background events, ``volume_time * |mu_new - mu_old|``. When the
+    background rate goes to zero, log10_mu keeps decreasing by a similar
+    amount in every iteration, so the log10 change alone never falls below
+    the tolerance; the change in the number of events does. The two
+    measures only differ when fewer than 1 / ln(10) ~ 0.43 background events
+    are expected, so the criterion is unchanged in all other cases.
+    """
+    diff = calc_diff_to_before(theta_old[2:], theta_new[2:])
+    for k in (0, 1):
+        a, b = theta_old[k], theta_new[k]
+        if a is None or b is None or not (np.isfinite(a) and np.isfinite(b)):
+            continue
+        diff += min(abs(a - b),
+                    volume_time * abs(np.power(10.0, a) - np.power(10.0, b)))
+    return diff
+
 
 def coppersmith(mag, fault_type):
     """
@@ -780,6 +821,8 @@ class ETASParameterCalculation:
         self.free_background = metadata.get("free_background", False)
         self.free_productivity = metadata.get("free_productivity", False)
         self.bg_term = metadata.get("bg_term", None)
+        self.max_iterations = metadata.get(
+            "max_iterations", DEFAULT_MAX_ITERATIONS)
 
         self.logger.info(
             "  Time Window: \n      {} (aux start)\n      {} "
@@ -1015,48 +1058,100 @@ class ETASParameterCalculation:
         if self.free_background:
             self.target_events["P_background"] = 0.1
 
-        if self.fixed_parameters:
-            self.constraints = []
-            starting_index = 2
-
-            if "alpha" in self.fixed_parameters:
-                if self.fixed_parameters["alpha"] == "beta":
-                    self.alpha = self.beta
-                else:
-                    self.alpha = self.fixed_parameters["alpha"]
-
-                starting_index = 3
-
-                def alpha_constant(x):
-                    return x[1] - x[6] * x[7] - self.alpha
-                self.constraints.append(
-                    NonlinearConstraint(alpha_constant, 0, 0))
-                self.logger.info(
-                    "  Alpha has been constrained to {}".format(self.alpha)
-                )
-
-            idx_fixed = [
-                k
-                for k, a in enumerate(self.__fixed_parameters[starting_index:])
-                if a is not None
-            ]
-            if len(idx_fixed) > 0:
-                def param_constant(x):
-                    return np.array(
-                        [x[k] for k in idx_fixed]
-                    ) - np.array(
-                        [self.__fixed_parameters[starting_index:][k]
-                         for k in idx_fixed]
-                    )
-                self.constraints.append(
-                    NonlinearConstraint(param_constant, 0, 0))
-
-            self.logger.info(
-                "  {} other constraints have been set up".format(
-                    len(idx_fixed))
-            )
+        self._set_up_fixed_parameters()
 
         self.preparation_done = True
+
+    def _set_up_fixed_parameters(self):
+        """Validate fixed parameters and set up the alpha constraint.
+
+        Fixed parameters are not optimized: they are inserted with exactly
+        the given value (see ``_optimizer_layout``), also when the value lies
+        outside the default range of the parameter. The only constraint left
+        for the optimizer is alpha = a - rho * gamma, which is fixed either
+        to a number or to beta.
+        """
+        self.constraints = []
+        self._fixed_values = {}
+        if not self.fixed_parameters:
+            return
+
+        fixed = {k: v for k, v in self.fixed_parameters.items()
+                 if v is not None}
+        alpha = fixed.pop("alpha", None)
+
+        if self.free_productivity:
+            derived = {"log10_k0", "a"} & set(fixed)
+            if alpha is not None:
+                derived.add("alpha")
+            if derived:
+                raise ValueError(
+                    "In free-productivity mode, log10_k0 and a are derived "
+                    "from the productivities of the individual events and "
+                    "cannot be fixed (nor can alpha). Fixed parameters "
+                    "given: {}".format(sorted(derived)))
+
+        if self.__theta_0 is not None and not isinstance(
+                self.__theta_0, np.ndarray):
+            self.__theta_0 = np.array(self.__theta_0, dtype=object)
+        for name, value in fixed.items():
+            idx = _PARAMETER_NAMES.index(name)
+            low, high = RANGES[idx]
+            if not low <= value <= high:
+                self.logger.warning(
+                    "  fixed {} = {} is outside the default range [{}, {}]; "
+                    "it is used as given.".format(name, value, low, high))
+            # start from the fixed value, so that the first expectation step
+            # is already consistent with it
+            self.__theta_0[idx] = value
+        self._fixed_values = fixed
+        self.logger.info("  fixed parameters: {}".format(fixed))
+
+        if alpha is None:
+            return
+        self.alpha = self.beta if alpha == "beta" else alpha
+        self.logger.info(
+            "  Alpha has been constrained to {}".format(self.alpha))
+
+        if all(n in fixed for n in ("a", "gamma", "rho")):
+            implied = fixed["a"] - fixed["rho"] * fixed["gamma"]
+            if not np.isclose(implied, self.alpha):
+                raise ValueError(
+                    "alpha is fixed to {}, but the fixed a, rho and gamma "
+                    "imply alpha = a - rho * gamma = {}".format(
+                        self.alpha, implied))
+            return
+
+        def alpha_constant(x_free):
+            full = self._expand_free_parameters(x_free)
+            names = self._optimizer_layout()[1]
+            p = dict(zip(names, full))
+            return p["a"] - p["rho"] * p["gamma"] - self.alpha
+
+        self.constraints.append(NonlinearConstraint(alpha_constant, 0, 0))
+
+    def _optimizer_layout(self):
+        """Which entries of theta the optimizer works on.
+
+        Returns ``(first, names, free_idx)``: the optimizer sees
+        ``theta[first:]`` (the background rates are estimated in closed
+        form; in free-productivity mode also log10_k0 and a are derived),
+        ``names`` are those parameters' names, and ``free_idx`` the positions
+        within them that are not fixed.
+        """
+        first = 4 if self.free_productivity else 2
+        names = _PARAMETER_NAMES[first:]
+        fixed = getattr(self, "_fixed_values", {})
+        free_idx = [i for i, n in enumerate(names) if n not in fixed]
+        return first, names, free_idx
+
+    def _expand_free_parameters(self, x_free):
+        """Insert fixed values into the vector of free parameters."""
+        _, names, free_idx = self._optimizer_layout()
+        fixed = getattr(self, "_fixed_values", {})
+        full = np.array([fixed.get(n, np.nan) for n in names], dtype=float)
+        full[free_idx] = x_free
+        return full
 
     @property
     def theta_0(self):
@@ -1108,7 +1203,15 @@ class ETASParameterCalculation:
         i = 0
         theta_old = self.__theta_0.copy()
 
-        while diff_to_before >= 0.001:
+        max_iterations = getattr(
+            self, "max_iterations", DEFAULT_MAX_ITERATIONS)
+        while diff_to_before >= CONVERGENCE_TOLERANCE:
+            if max_iterations is not None and i >= max_iterations:
+                self.logger.warning(
+                    "  stopping after max_iterations = {} iterations without "
+                    "convergence (last difference: {}).".format(
+                        max_iterations, diff_to_before))
+                break
             self.logger.info("  iteration {}".format(i))
 
             self.logger.debug("    expectation step")
@@ -1133,7 +1236,9 @@ class ETASParameterCalculation:
                 pprint.pformat(parameter_array2dict(self.__theta), indent=4)
             )
 
-            diff_to_before = calc_diff_to_before(theta_old, self.__theta)
+            diff_to_before = _convergence_difference(
+                theta_old, self.__theta,
+                self.area * self.timewindow_length)
             self.logger.info(
                 "    difference to previous: {}".format(diff_to_before))
 
@@ -1148,8 +1253,9 @@ class ETASParameterCalculation:
                 self.update_source_kappa()
             i += 1
 
-        self.logger.info(
-            "  stopping here. converged after " "{} iterations.".format(i))
+        if diff_to_before < CONVERGENCE_TOLERANCE:
+            self.logger.info(
+                "  stopping here. converged after {} iterations.".format(i))
         self.i = i
 
         self.logger.info("    last expectation step")
@@ -1330,19 +1436,39 @@ class ETASParameterCalculation:
         start_calc = dt.datetime.now()
 
         # estimate mu independently and remove from parameters
-        mu_hat = self.n_hat / (self.area * self.timewindow_length)
-        if self.bg_term is not None:
-            iota_hat = self.i_hat / (self.area * self.timewindow_length)
+        fixed = getattr(self, "_fixed_values", {})
+        with np.errstate(divide="ignore"):
+            log10_mu = fixed.get("log10_mu", np.log10(
+                self.n_hat / (self.area * self.timewindow_length)))
+            if self.bg_term is not None:
+                log10_iota = fixed.get("log10_iota", np.log10(
+                    self.i_hat / (self.area * self.timewindow_length)))
 
-        if self.free_productivity:
-            # select values from theta needed in free prod mode
-            theta_0_without_mu = theta_0[4:]
-            bounds = ranges[4:]
+        # the optimizer only sees the parameters that are not fixed
+        first, _, free_idx = self._optimizer_layout()
+        x0 = np.array(theta_0[first:], dtype=float)[free_idx]
+        bounds = [ranges[first:][i] for i in free_idx]
+
+        def minimize_free(objective, args):
+            if len(free_idx) == 0:
+                return self._expand_free_parameters(x0)
+
+            def objective_free(x, *a):
+                return objective(self._expand_free_parameters(x), *a)
 
             res = minimize(
-                neg_log_likelihood_free_prod,
-                x0=theta_0_without_mu,
+                objective_free,
+                x0=x0,
                 bounds=bounds,
+                args=args,
+                tol=1e-12,
+                constraints=self.constraints or (),
+            )
+            return self._expand_free_parameters(res.x)
+
+        if self.free_productivity:
+            new_theta_without_mu = minimize_free(
+                neg_log_likelihood_free_prod,
                 args=(
                     self.n_hat,
                     self.pij,
@@ -1353,38 +1479,18 @@ class ETASParameterCalculation:
                     self.beta,
                     self.m_ref - self.delta_m / 2,
                 ),
-                tol=1e-12,
-                constraints=self.constraints,
             )
-
-            new_theta_without_mu = res.x
-            if self.bg_term is not None:
-                new_theta = [
-                    np.log10(mu_hat),
-                    np.log10(iota_hat),
-                    None,
-                    None,
-                    *new_theta_without_mu,
-                ]
-            else:
-                new_theta = [np.log10(mu_hat), None, None,
-                             None, *new_theta_without_mu]
+            # log10_k0 and a are derived from the productivities afterwards
+            new_theta = [log10_mu,
+                         log10_iota if self.bg_term is not None else None,
+                         None, None, *new_theta_without_mu]
 
         else:
-            theta_0_without_mu = theta_0[2:]
-            bounds = ranges[2:]
-
-            res = minimize(
+            new_theta_without_mu = minimize_free(
                 neg_log_likelihood,
-                x0=theta_0_without_mu,
-                bounds=bounds,
                 args=(self.pij, self.source_events,
                       self.m_ref - self.delta_m / 2),
-                tol=1e-12,
-                constraints=self.constraints,
             )
-
-            new_theta_without_mu = res.x
             # expected number of aftershocks per source at the new parameters
             self.source_events["G"] = expected_aftershocks(
                 [
@@ -1394,14 +1500,9 @@ class ETASParameterCalculation:
                 ],
                 [new_theta_without_mu, self.m_ref - self.delta_m / 2],
             )
-            if self.bg_term is not None:
-                new_theta = [
-                    np.log10(mu_hat),
-                    np.log10(iota_hat),
-                    *new_theta_without_mu,
-                ]
-            else:
-                new_theta = [np.log10(mu_hat), None, *new_theta_without_mu]
+            new_theta = [log10_mu,
+                         log10_iota if self.bg_term is not None else None,
+                         *new_theta_without_mu]
 
         self.logger.debug(
             "    optimization step took {}".format(
@@ -1475,6 +1576,7 @@ class ETASParameterCalculation:
             "initial_values": self.theta_0,
             "final_parameters": self.theta,
             "n_iterations": self.i,
+            "max_iterations": getattr(self, "max_iterations", None),
             "fn_ip": fn_ip,
             "fn_src": fn_src,
         }

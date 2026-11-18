@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Changed behaviour
+
+These fixes change results in the cases they cover; inversions without fixed
+parameters and with a non-vanishing background rate are unaffected.
+
+- **The inversion no longer runs forever when the background rate goes to
+  zero.** For log10_mu and log10_iota, the stopping rule now also accepts a
+  change of less than 0.001 in the expected *number* of background events.
+  The rule is unchanged unless fewer than about 0.43 background events are
+  expected. New setting `max_iterations` (default 1000; `None` for no limit)
+  stops with a warning as a safety net.
+- **Fixed parameters are now exact.** They are removed from the optimization
+  and inserted with the given value, instead of being imposed as equality
+  constraints. Previously:
+  - a fixed value outside the default parameter range was silently replaced
+    by the range limit (e.g. `log10_tau = 13` became 12.26);
+  - fixed `log10_mu` / `log10_iota` were silently ignored.
+  A value outside the default range is now used as given, with a warning.
+  The initial values are set to the fixed values, so the first expectation
+  step is consistent with them. Inversions with fixed parameters (but no
+  alpha constraint) now use the L-BFGS-B optimizer instead of SLSQP, and are
+  often faster.
+- **Fixed parameters work with free productivity.** Previously the indices
+  were shifted (wrong parameters fixed, or `IndexError` for alpha). Fixing
+  `log10_k0`, `a` or alpha in free-productivity mode raises a clear
+  `ValueError`, since these are derived from the event productivities.
+- Fixing alpha together with all of `a`, `rho` and `gamma` to inconsistent
+  values raises a `ValueError`.
+
 ### Fixed
 
 - **Free-productivity inversion (`free_productivity=True`) crashed** with
