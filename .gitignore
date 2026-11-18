@@ -130,3 +130,13 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# IDE
+.idea/
+.vscode/
+
+# virtualenvs created inside the package directory
+etas/bin/
+etas/lib/
+etas/include/
+etas/pyvenv.cfg
