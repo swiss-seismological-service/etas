@@ -1,4 +1,3 @@
-import sys
 from etas.inversion import ETASParameterCalculation, read_shape_coords, polygon_surface, round_half_up, parameter_dict2array, haversine
 from etas.simulation import simulate_aftershock_time
 import pandas as pd
@@ -7,11 +6,8 @@ from shapely.geometry import Polygon
 from joblib import Parallel, delayed
 from tabulate import tabulate
 import numpy as np
-from scipy.special import expi
 import json
 from scipy.integrate  import quad
-from shapely.geometry import Polygon, Point, LineString
-import matplotlib.pyplot as plt
 
 
 def compute_dist_squared_from_i(i,lat_rads: np.ndarray,long_rads: np.ndarray,earth_radius=6.3781e3):
@@ -165,10 +161,9 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
         filtered_catalog = catalog.copy()
 
         # filter for events in relevant timewindow
-        filtered_catalog.query(
+        filtered_catalog = filtered_catalog.query(
             "time >= @ self.auxiliary_start and time < @ self.testwindow_end",
             # "time >= @ self.auxiliary_start",
-            inplace=True,
         )
         self.logger.info(
             "  {} out of {} events are within time window.".format(
@@ -193,7 +188,7 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
                 ),
             )
             filtered_catalog = gdf[gdf.intersects(poly)].copy()
-            filtered_catalog.drop("geometry", axis=1, inplace=True)
+            filtered_catalog = filtered_catalog.drop("geometry", axis=1)
         else:
             self.area = 6.3781e3**2 * 4 * np.pi
         self.logger.info("Region has {} square km".format(self.area))
@@ -203,7 +198,7 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
 
         # filter for events above cutoff magnitude - delta_m/2
         # first sort by time, in case ETAS-positive is used
-        filtered_catalog.sort_values(by="time", inplace=True)
+        filtered_catalog = filtered_catalog.sort_values(by="time")
         if self.delta_m > 0:
             filtered_catalog["magnitude"] = (
                 round_half_up(filtered_catalog["magnitude"] / self.delta_m)
@@ -224,7 +219,7 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
                 )
         else:
             filtered_catalog["mc_current"] = self.mc
-        filtered_catalog.query("magnitude >= mc_current", inplace=True)
+        filtered_catalog = filtered_catalog.query("magnitude >= mc_current")
         self.logger.info(
             "{} events are above completeness.".format(len(filtered_catalog))
         )

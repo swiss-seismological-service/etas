@@ -457,7 +457,7 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
     tau = np.power(10, log10_tau)
     d = np.power(10, log10_d)
 
-    source_events["G"] = expected_aftershocks(
+    G = expected_aftershocks(
         [
             source_events["source_magnitude"],
             source_events["pos_source_to_start_time_distance"],
@@ -466,13 +466,10 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
         [theta, mc_min],
     )
 
-    aftershock_term = ll_aftershock_term(
-        source_events["l_hat"],
-        source_events["G"],
-    ).sum()
+    aftershock_term = ll_aftershock_term(source_events["l_hat"], G).sum()
 
     # space time distribution term
-    Pij["likelihood_term"] = (
+    likelihood_term = (
         (
             omega * np.log(tau)
             - np.log(upper_gamma_ext(-omega, c / tau))
@@ -492,7 +489,7 @@ def neg_log_likelihood(theta, Pij, source_events, mc_min):
         - np.log(np.pi)
     )
     distribution_term = Pij["Pij"].mul(
-        Pij["zeta_plus_1"]).mul(Pij["likelihood_term"]).sum()
+        Pij["zeta_plus_1"]).mul(likelihood_term).sum()
 
     total = aftershock_term + distribution_term
 
@@ -517,10 +514,10 @@ def expected_aftershocks_free_prod(
         if no_end:
             event_magnitude, event_kappa, event_time_to_start = event
         else:
-            event_magnitude,
-            event_kappa,
-            event_time_to_start,
-            event_time_to_end = event
+            (event_magnitude,
+             event_kappa,
+             event_time_to_start,
+             event_time_to_end) = event
 
     number_factor = event_kappa
     area_factor = (
@@ -570,18 +567,8 @@ def neg_log_likelihood_free_prod(
     tau = np.power(10, log10_tau)
     d = np.power(10, log10_d)
 
-    source_events["G"] = expected_aftershocks_free_prod(
-        [
-            source_events["source_magnitude"],
-            source_events["source_kappa"],
-            source_events["pos_source_to_start_time_distance"],
-            source_events["source_to_end_time_distance"],
-        ],
-        [theta, mc_min],
-    )
-
     # space time distribution term
-    Pij["likelihood_term"] = (
+    likelihood_term = (
         (
             omega * np.log(tau)
             - np.log(upper_gamma_ext(-omega, c / tau))
@@ -601,7 +588,7 @@ def neg_log_likelihood_free_prod(
         - np.log(np.pi)
     )
     distribution_term = Pij["Pij"].mul(
-        Pij["zeta_plus_1"]).mul(Pij["likelihood_term"]).sum()
+        Pij["zeta_plus_1"]).mul(likelihood_term).sum()
 
     total = distribution_term
 
@@ -970,7 +957,7 @@ class ETASParameterCalculation:
     def prepare(self):
         if self.preparation_done:
             self.logger.warning("Preparation already done, aborting...")
-            pass
+            return
 
         self.logger.info("PREPARING {}".format(self.name))
         self.logger.info("  filtering catalog...")
@@ -1119,7 +1106,7 @@ class ETASParameterCalculation:
         self.logger.info("START INVERSION")
         diff_to_before = 100
         i = 0
-        theta_old = self.__theta_0[:]
+        theta_old = self.__theta_0.copy()
 
         while diff_to_before >= 0.001:
             self.logger.info("  iteration {}".format(i))
@@ -1155,7 +1142,7 @@ class ETASParameterCalculation:
                 self.logger.debug("    branching ratio: {}".format(br))
             except BaseException:
                 self.logger.debug("    branching ratio not calculated")
-            theta_old = self.__theta[:]
+            theta_old = self.__theta.copy()
             if self.free_productivity:
                 self.logger.debug("    updating source kappa")
                 self.update_source_kappa()
@@ -1185,9 +1172,8 @@ class ETASParameterCalculation:
         filtered_catalog = catalog.copy()
 
         # filter for events in relevant timewindow
-        filtered_catalog.query(
+        filtered_catalog = filtered_catalog.query(
             "time >= @ self.auxiliary_start and time < @ self.timewindow_end",
-            inplace=True,
         )
         self.logger.info(
             "  {} out of {} events are within time window.".format(
@@ -1213,7 +1199,7 @@ class ETASParameterCalculation:
                     ),
                 )
                 filtered_catalog = gdf[gdf.intersects(poly)].copy()
-                filtered_catalog.drop("geometry", axis=1, inplace=True)
+                filtered_catalog = filtered_catalog.drop("geometry", axis=1)
                 self.logger.info("Region has {} square km".format(self.area))
             else:
                 hull = ConvexHull(self.shape_coords)
@@ -1236,7 +1222,7 @@ class ETASParameterCalculation:
 
         # filter for events above cutoff magnitude - delta_m/2
         # first sort by time, in case ETAS-positive is used
-        filtered_catalog.sort_values(by="time", inplace=True)
+        filtered_catalog = filtered_catalog.sort_values(by="time")
         if self.delta_m > 0:
             filtered_catalog["magnitude"] = (
                 round_half_up(filtered_catalog["magnitude"] / self.delta_m)
@@ -1271,7 +1257,7 @@ class ETASParameterCalculation:
                 "  Rounding issues found. Check if delta_m and"
                 " mc_current are set correctly."
             )
-        filtered_catalog.query("magnitude >= mc_current", inplace=True)
+        filtered_catalog = filtered_catalog.query("magnitude >= mc_current")
         self.logger.info(
             "{} events are above completeness.".format(len(filtered_catalog))
         )
@@ -1298,8 +1284,8 @@ class ETASParameterCalculation:
                 ),
             )
             target_events = gdf[gdf.intersects(inner_poly)].copy()
-            target_events.drop("geometry", axis=1, inplace=True)
-        target_events.query("time > @ self.timewindow_start", inplace=True)
+            target_events = target_events.drop("geometry", axis=1)
+        target_events = target_events.query("time > @ self.timewindow_start")
         target_events["mc_current_above_ref"] = \
             target_events["mc_current"] - self.m_ref
 
@@ -1377,7 +1363,8 @@ class ETASParameterCalculation:
                     np.log10(mu_hat),
                     np.log10(iota_hat),
                     None,
-                    None * new_theta_without_mu,
+                    None,
+                    *new_theta_without_mu,
                 ]
             else:
                 new_theta = [np.log10(mu_hat), None, None,
@@ -1398,6 +1385,15 @@ class ETASParameterCalculation:
             )
 
             new_theta_without_mu = res.x
+            # expected number of aftershocks per source at the new parameters
+            self.source_events["G"] = expected_aftershocks(
+                [
+                    self.source_events["source_magnitude"],
+                    self.source_events["pos_source_to_start_time_distance"],
+                    self.source_events["source_to_end_time_distance"],
+                ],
+                [new_theta_without_mu, self.m_ref - self.delta_m / 2],
+            )
             if self.bg_term is not None:
                 new_theta = [
                     np.log10(mu_hat),
@@ -1459,15 +1455,16 @@ class ETASParameterCalculation:
             "inversion_done": self.inversion_done,
             "n_target_events": len(self.target_events),
             "area": self.area,
-            "log10_mu_range": RANGES[0],
-            "log10_k0_range": RANGES[1],
-            "a_range": RANGES[2],
-            "log10_c_range": RANGES[3],
-            "omega_range": RANGES[4],
-            "log10_tau_range": RANGES[5],
-            "log10_d_range": RANGES[6],
-            "gamma_range": RANGES[7],
-            "rho_range": RANGES[8],
+            "log10_mu_range": LOG10_MU_RANGE,
+            "log10_iota_range": LOG10_IOTA_RANGE,
+            "log10_k0_range": LOG10_K0_RANGE,
+            "a_range": A_RANGE,
+            "log10_c_range": LOG10_C_RANGE,
+            "omega_range": OMEGA_RANGE,
+            "log10_tau_range": LOG10_TAU_RANGE,
+            "log10_d_range": LOG10_D_RANGE,
+            "gamma_range": GAMMA_RANGE,
+            "rho_range": RHO_RANGE,
             "beta": self.beta,
             "b_positive": self.b_positive,
             "three_dim": self.three_dim,
@@ -1526,7 +1523,7 @@ class ETASParameterCalculation:
                     targets.latitude, targets.longitude),
             )
             targets = gdf[gdf.intersects(inner_poly)].copy()
-            targets.drop("geometry", axis=1, inplace=True)
+            targets = targets.drop("geometry", axis=1)
 
         if self.mc == "positive":
             beta = estimate_beta_tinti(
@@ -1663,8 +1660,8 @@ class ETASParameterCalculation:
 
             # filter for only small enough distances
             drs = source.distance_range_squared  # noqa
-            potential_targets.query(
-                "spatial_distance_squared <= @drs", inplace=True)
+            potential_targets = potential_targets.query(
+                "spatial_distance_squared <= @drs")
 
             # get source id and info of target events
             potential_targets["source_id"] = source.Index

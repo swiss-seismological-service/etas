@@ -65,3 +65,20 @@ def test_pij_consistency(short_inversion):
     # and expected aftershocks equal the sum of triggering probabilities
     assert short_inversion.source_events["l_hat"].sum() == pytest.approx(
         short_inversion.pij["Pij"].sum())
+
+
+def test_likelihood_has_no_side_effects(short_inversion):
+    from etas.inversion import neg_log_likelihood
+    calc = short_inversion
+    pij, src = calc.pij.copy(), calc.source_events.copy()
+    theta = [calc.theta[k] for k in ["log10_k0", "a", "log10_c", "omega",
+                                     "log10_tau", "log10_d", "gamma", "rho"]]
+    value = neg_log_likelihood(theta, pij, src, calc.m_ref - calc.delta_m / 2)
+    assert np.isfinite(value)
+    assert list(pij.columns) == list(calc.pij.columns)
+    assert list(src.columns) == list(calc.source_events.columns)
+
+
+def test_sources_keep_expected_aftershocks_column(short_inversion):
+    assert "G" in short_inversion.source_events.columns
+    assert np.isfinite(short_inversion.source_events["G"]).all()

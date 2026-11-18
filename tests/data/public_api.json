@@ -23,7 +23,7 @@
     [
      "endtime",
      "POSITIONAL_OR_KEYWORD",
-     "<datetime>"
+     "None"
     ],
     [
      "minmagnitude",

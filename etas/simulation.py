@@ -21,7 +21,6 @@ import numpy as np
 import pandas as pd
 from scipy.special import gamma as gamma_func
 from scipy.special import gammainccinv
-from seismostats import ForecastCatalog
 from shapely.geometry import Polygon
 
 from etas.inversion import (ETASParameterCalculation, branching_integral,
@@ -594,14 +593,14 @@ def generate_aftershocks(
         [col for col in aftershocks.columns if "parent" in col]
     ].reset_index(drop=True)
     aftershocks["time_delta"] = all_deltas
-    aftershocks.query("time_delta <= @ timewindow_length", inplace=True)
+    aftershocks = aftershocks.query("time_delta <= @ timewindow_length")
 
     aftershocks["time"] = aftershocks["parent_time"] + pd.to_timedelta(
-        aftershocks["time_delta"], unit="d"
+        aftershocks["time_delta"], unit="D"
     )
-    aftershocks.query("time <= @ timewindow_end", inplace=True)
+    aftershocks = aftershocks.query("time <= @ timewindow_end")
     if auxiliary_end is not None:
-        aftershocks.query("time > @ auxiliary_end", inplace=True)
+        aftershocks = aftershocks.query("time > @ auxiliary_end")
 
     # location of aftershock
     aftershocks["radius"] = simulate_aftershock_radius(
@@ -1053,7 +1052,7 @@ def simulate_catalog_continuation(
         )
 
         aftershocks.index += catalog.index.max() + 1
-        aftershocks.query("time>@auxiliary_end", inplace=True)
+        aftershocks = aftershocks.query("time>@auxiliary_end")
 
         logger.debug(f"number of aftershocks: {len(aftershocks.index)}")
         logger.debug(
@@ -1267,11 +1266,10 @@ class ETASSimulation:
                 [simulations, continuation], ignore_index=False)
 
             if sim_id % chunksize == 0 or sim_id == n_simulations - 1:
-                simulations.query(
+                simulations = simulations.query(
                     "time>=@self.forecast_start_date and "
                     "time<=@self.forecast_end_date and "
                     "magnitude>=@m_threshold-@self.inversion_params.delta_m/2",
-                    inplace=True,
                 )
                 if self.inversion_params.delta_m > 0:
                     simulations.magnitude = bin_to_precision(
@@ -1386,7 +1384,14 @@ class ETASSimulation:
         filter_polygon: bool = True,
         chunksize: int = 100,
         info_cols: list = [],
-    ) -> ForecastCatalog:
+    ) -> "ForecastCatalog":  # noqa: F821
+        try:
+            from seismostats import ForecastCatalog
+        except ImportError as e:
+            raise ImportError(
+                "simulate_to_df returns a seismostats ForecastCatalog; "
+                "install the 'hermes' extra: pip install etas[hermes]"
+            ) from e
         store = pd.DataFrame()
         for chunk in self.simulate(
             forecast_n_days,

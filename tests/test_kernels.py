@@ -137,3 +137,20 @@ def test_gutenberg_richter_sampling_ks():
     mags = simulate_magnitudes(5000, np.log(10), 3.0)
     assert stats.kstest(mags - 3.0, "expon",
                         args=(0, 1 / np.log(10))).pvalue > 0.01
+
+
+def test_polygon_coordinates_are_lat_lon():
+    """Shapes are given as (latitude, longitude) pairs throughout the
+    package. A 1x1 degree box at 60-61 N must have about half the area of
+    one at the equator; with swapped axes it would not."""
+    from shapely.geometry import Polygon
+    box = Polygon([(60, 0), (60, 1), (61, 1), (61, 0)])
+    expected = 111.2 * 111.3 * np.cos(np.radians(60.5))
+    assert polygon_surface(box) == pytest.approx(expected, rel=0.01)
+
+
+def test_example_shape_file_is_lat_lon():
+    from tests.conftest import INPUT
+    coords = np.load(INPUT / "california_shape.npy")
+    assert np.all((coords[:, 0] > 30) & (coords[:, 0] < 45))      # lat
+    assert np.all((coords[:, 1] > -130) & (coords[:, 1] < -110))  # lon
