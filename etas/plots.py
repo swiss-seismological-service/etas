@@ -61,7 +61,7 @@ def temporal_decay_plot(
     Args:
         p_mat: dataframe containing pairs of events, columns:
             'time_distance' - the difference in time between events
-            'Pij' - probability that event i triggered j
+            'Pij' - probability that event e_j was triggered by event e_i
             'zeta_plus_1' - scaling factor adjusting for incompleteness
         tau: ETAS parameter
         c: ETAS parameter
@@ -147,7 +147,7 @@ def productivity_plot(
     Args:
         p_mat: dataframe containing pairs of events, columns:
             'source_magnitude' - the magnitude of the triggering event
-            'Pij' - probability that event i triggered j
+            'Pij' - probability that event e_j was triggered by event e_i
             'zeta_plus_1' - scaling factor adjusting for incompleteness
         catalog: dataframe used for inversion
         params: dict with ETAS parameters
@@ -230,7 +230,7 @@ def spatial_decay_plot(
         p_mat: dataframe containing pairs of events, columns:
             'spatial_distance_squared' - the distance between events
             'source_magnitude' - the magnitude of the triggering event
-            'Pij' - probability that event i triggered j
+            'Pij' - probability that event e_j was triggered by event e_i
             'zeta_plus_1' - scaling factor adjusting for incompleteness
         magnitudes: the list of magnitudes of triggering events for which
             plots should be generated

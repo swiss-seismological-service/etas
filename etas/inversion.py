@@ -11,13 +11,20 @@ https://doi.org/10.1029/2021JB022379.
 
 The model
 ---------
-The conditional intensity at time *t* and location *x* is
+A catalog consists of events $e_1, \dots, e_N$; event $e_i$ has the
+occurrence time $t_i$ (days), the location $x_i$ (latitude, longitude) and
+the magnitude $m_i$. The conditional intensity, that is, the expected
+number of events per day and km² at time $t$ and location $x$, given the
+events before $t$, is
 
 $$
-\lambda(t, x) = \mu + \sum_{i: t_i < t} g(m_i, t - t_i, |x - x_i|^2),
+\lambda(t, x) = \mu + \sum_{i: t_i < t} g(m_i, t - t_i, r_i^2(x)),
 $$
 
-with the triggering kernel
+where $\mu$ is the background rate (per day and km²), the sum goes over all
+events $e_i$ before $t$, and $r_i(x)$ is the distance (km) between $x_i$ and
+$x$. The triggering kernel $g$ is the rate of direct aftershocks of an event
+of magnitude $m$, at a time delay $t$ (days) and a distance $r$ (km),
 
 $$
 g(m, t, r^2) = k_0 \, e^{a (m - m_c)}
@@ -25,11 +32,16 @@ g(m, t, r^2) = k_0 \, e^{a (m - m_c)}
     \cdot \frac{1}{(r^2 + d \, e^{\gamma (m - m_c)})^{1 + \rho}},
 $$
 
-where $m_c$ is the reference magnitude of the kernel
-(``m_ref - delta_m / 2``) and magnitudes above it follow the
-Gutenberg-Richter law with parameter $\beta = b \ln 10$. Time is in
-days, distances in km (or ``space_unit_in_meters`` for 3D catalogs), so
-$\mu$ is a rate per day and km².
+where $m_c$ is the reference magnitude (``m_ref - delta_m / 2``); $k_0$
+and $a$ set the number of aftershocks and its increase with magnitude; $c$
+(days), $\omega$ and $\tau$ (days) are the offset, exponent and taper time
+of the Omori-Utsu law; and $d$ (km²), $\gamma$ and $\rho$ are the size of
+the aftershock zone of an event of magnitude $m_c$, its increase with
+magnitude, and the decay of the rate with distance. Magnitudes at or above
+$m_c$ follow the Gutenberg-Richter law with parameter $\beta = b \ln 10$,
+where $b$ is the b-value. The documentation page "The model" explains each
+term with example values. For 3D catalogs, distances are in units of
+``space_unit_in_meters`` instead of km.
 
 Parameters are handled either as a dict or as an array ``theta`` in the
 order log10_mu, log10_iota, log10_k0, a, log10_c, omega, log10_tau,
@@ -422,6 +434,11 @@ def upper_gamma_ext(a, x):
     $$
     \Gamma(a, x) = \int_x^\infty t^{a - 1} e^{-t} \, dt
     $$
+
+    where $a$ is the shape parameter, $x$ the lower limit of the integral,
+    and $t$ the integration variable. In the ETAS model, it appears in the
+    integral of the tapered time kernel, with $a = -\omega$ and
+    $x = c / \tau$.
 
     For ``a > 0`` this is ``gammaincc(a, x) * gamma(a)``, for ``a = 0`` the
     exponential integral ``E1(x)``, and for ``a < 0`` it is obtained by the
@@ -1707,12 +1724,13 @@ class ETASParameterCalculation:
         """Estimate the ETAS parameters with the expectation-maximization
         algorithm.
 
-        Alternates between the expectation step (probabilities ``Pij`` that
-        event *i* triggered event *j*, and the expected number of background
-        events) and the maximization step (parameters given those
-        probabilities), until the parameters change by less than
-        ``CONVERGENCE_TOLERANCE`` (see `_convergence_difference`) or
-        ``max_iterations`` is reached. Requires `prepare`.
+        Alternates between the expectation step (the probabilities
+        $p_{ij}$ that event $e_j$ was triggered by event $e_i$, and the
+        expected number of background events) and the maximization step
+        (parameters given those probabilities), until the parameters
+        change by less than ``CONVERGENCE_TOLERANCE`` (see
+        `_convergence_difference`) or ``max_iterations`` is reached.
+        Requires `prepare`.
 
         Returns
         -------
@@ -2430,15 +2448,29 @@ class ETASParameterCalculation:
         return res_df
 
     def expectation_step(self, theta, mc_min):
-        """Expectation step: triggering and background probabilities.
+        r"""Expectation step: triggering and background probabilities.
 
-        For each pair of a possible source *i* and target *j*,
-        ``Pij = g_ij / (mu_j + sum_k g_kj * (1 + xi_k))``, where ``g`` is the
-        triggering kernel and ``1 + xi`` the `responsibility_factor`.
-        Summing over sources gives each target's probability of being triggered
-        or background; summing over targets gives each source's estimated
-        number of aftershocks ``l_hat``; both are scaled by the
-        `observation_factor` to account for undetected events.
+        For each pair of a possible triggering event (source) $e_i$ and a
+        possible aftershock (target) $e_j$, the probability that $e_j$ was
+        triggered by $e_i$ is
+
+        $$
+        p_{ij} = \frac{g_{ij}}{\mu_j + \sum_k (1 + \xi_k) \, g_{kj}},
+        $$
+
+        where $g_{ij}$ is the triggering kernel evaluated for the magnitude
+        of $e_i$, the time between $e_i$ and $e_j$ and their distance (column
+        ``gij``); $\mu_j$ is the background rate at $e_j$ (constant, or per
+        event with ``free_background``, plus the ``bg_term`` contribution if
+        used); the sum goes over all possible sources $e_k$ of $e_j$; and
+        $1 + \xi_k$ is the `responsibility_factor` of $e_k$, which accounts
+        for triggering by undetected events (1 for a constant completeness).
+        The denominator is the total rate at $e_j$ (column ``tot_rates``).
+        Summing $p_{ij}$ over all sources $e_i$ gives the probability that
+        $e_j$ was triggered (``P_triggered``); summing over all targets $e_j$,
+        weighted by the `observation_factor` $1 + \zeta_j$ of each target,
+        gives the expected number of direct aftershocks of $e_i$
+        (``l_hat``).
 
         Parameters
         ----------

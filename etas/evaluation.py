@@ -1,18 +1,27 @@
-"""Evaluation of a fitted ETAS model on a test window.
+r"""Evaluation of a fitted ETAS model on a test window.
 
 Given the output of an inversion (``ETASParameterCalculation.store_results``),
-`ETASLikelihoodCalculation` computes, for every event *i* in the test
-window ``(timewindow_end, testwindow_end]``, the event-based log-likelihood
+`ETASLikelihoodCalculation` evaluates the fitted model on the events
+$e_i$ in the test window ``(timewindow_end, testwindow_end]``. For each of
+them, with occurrence time $t_i$ and location $x_i$, the event-based
+log-likelihood is
 
 $$
-\\mathrm{LL}_i = \\log \\lambda^*(t_i, x_i)
-    - \\int_{t_{i-1}}^{t_i} \\int_R \\lambda^*(s, x)\\, dx\\, ds,
+\mathrm{LL}_i = \log \lambda^*(t_i, x_i)
+    - \int_{t_{i-1}}^{t_i} \int_R \lambda^*(s, x)\, dx\, ds,
 $$
 
-and its split into a temporal part (``TLL``, using the space-integrated rate
-$\\lambda^*(t)$) and a spatial part (``SLL = LL - TLL``). The averages
-over the test window are reported as ``nll`` (negative), ``tll`` and ``sll``,
-and compared to a homogeneous Poisson model fitted to the training period.
+where $\lambda^*(t, x)$ is the conditional intensity of the model (events
+per day and km², given all events before $t$, see `etas.inversion`),
+$t_{i-1}$ is the occurrence time of the previous event $e_{i-1}$, and $R$
+is the region. The first term rewards a high rate where and when the event
+occurred; the second term penalizes the number of events the model
+expected between $e_{i-1}$ and $e_i$. The temporal part ``TLL`` is the same
+with the space-integrated rate $\lambda^*(t) = \int_R \lambda^*(t, x)\,
+dx$ in place of $\lambda^*(t_i, x_i)$, and the spatial part is
+``SLL = LL - TLL``. The averages over the events in the test window are
+reported as ``nll`` (negative ``LL``), ``tll`` and ``sll``, and compared to
+a homogeneous Poisson model fitted to the training period.
 
 Units: time in days, distances in km, rates per day and km².
 """
@@ -329,10 +338,11 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
         Returns
         -------
         np.ndarray
-            For each event *i* in the test window,
-            $\\int_{t_{i-1}}^{t_i} \\int_R \\lambda^*(s, x)\\,dx\\,ds$
-            (expected number of events since the previous one); zero for
-            events outside the test window.
+            For each event $e_i$ in the test window, the expected number of
+            events between the previous event $e_{i-1}$ and $e_i$,
+            $\\int_{t_{i-1}}^{t_i} \\int_R \\lambda^*(s, x)\\,dx\\,ds$,
+            where $t_i$ is the occurrence time of $e_i$ and $R$ the region;
+            zero for events outside the test window.
         """
         int_lambda_star = np.zeros_like(self.magnitudes)
         aux_start = self.auxiliary_start.to_numpy()
@@ -375,7 +385,8 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
 
     def lambd(self):
         """Conditional intensity $\\lambda^*(t_i, x_i)$ (per day and
-        km²) at each event in the test window; zero elsewhere.
+        km²) at the occurrence time $t_i$ and location $x_i$ of each event
+        $e_i$ in the test window; zero elsewhere.
 
         Note: `evaluate` replaces this method by its result array.
         """
@@ -396,8 +407,10 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
         return lam
 
     def lambd_star(self):
-        """Space-integrated intensity $\\lambda^*(t_i)$ (per day) at
-        each event in the test window; zero elsewhere.
+        """Space-integrated intensity $\\lambda^*(t_i)$ (per day), that is,
+        the expected number of events per day in the whole region, at the
+        occurrence time $t_i$ of each event $e_i$ in the test window; zero
+        elsewhere.
 
         Note: `evaluate` replaces this method by its result array.
         """
