@@ -11,7 +11,7 @@ https://doi.org/10.1785/0220200231.
 - `ETASSimulation` simulates continuations of an observed catalog
   after an inversion (forecasts), many times.
 
-Units as in `etas.inversion`: days, km, rates per day and km².
+Units as in `etas.inversion`: km, days, rates per km² and day.
 Random numbers come from numpy's global generator; some functions reseed
 it (see their notes).
 """

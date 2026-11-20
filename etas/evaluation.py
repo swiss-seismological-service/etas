@@ -3,27 +3,28 @@ r"""Evaluation of a fitted ETAS model on a test window.
 Given the output of an inversion (``ETASParameterCalculation.store_results``),
 `ETASLikelihoodCalculation` evaluates the fitted model on the events
 $e_i$ in the test window ``(timewindow_end, testwindow_end]``. For each of
-them, with occurrence time $t_i$ and location $x_i$, the event-based
-log-likelihood is
+them, with location $(x_i, y_i)$ and occurrence time $t_i$, the
+event-based log-likelihood is
 
 $$
-\mathrm{LL}_i = \log \lambda^*(t_i, x_i)
-    - \int_{t_{i-1}}^{t_i} \int_R \lambda^*(s, x)\, dx\, ds,
+\mathrm{LL}_i = \log \lambda^*(x_i, y_i, t_i)
+    - \int_{t_{i-1}}^{t_i} \iint_R \lambda^*(x, y, s)\, dx\, dy\, ds,
 $$
 
-where $\lambda^*(t, x)$ is the conditional intensity of the model (events
-per day and km², given all events before $t$, see `etas.inversion`),
-$t_{i-1}$ is the occurrence time of the previous event $e_{i-1}$, and $R$
-is the region. The first term rewards a high rate where and when the event
-occurred; the second term penalizes the number of events the model
-expected between $e_{i-1}$ and $e_i$. The temporal part ``TLL`` is the same
-with the space-integrated rate $\lambda^*(t) = \int_R \lambda^*(t, x)\,
-dx$ in place of $\lambda^*(t_i, x_i)$, and the spatial part is
-``SLL = LL - TLL``. The averages over the events in the test window are
-reported as ``nll`` (negative ``LL``), ``tll`` and ``sll``, and compared to
-a homogeneous Poisson model fitted to the training period.
+where $\lambda^*(x, y, t)$ is the conditional intensity of the model
+(events per km² and day, given all events before $t$, see
+`etas.inversion`), $t_{i-1}$ is the occurrence time of the previous event
+$e_{i-1}$, and $R$ is the region. The first term rewards a high rate where
+and when the event occurred; the second term penalizes the number of
+events the model expected between $e_{i-1}$ and $e_i$. The temporal part
+``TLL`` is the same with the space-integrated rate
+$\lambda^*(t) = \iint_R \lambda^*(x, y, t)\, dx\, dy$ in place of
+$\lambda^*(x_i, y_i, t_i)$, and the spatial part is ``SLL = LL - TLL``.
+The averages over the events in the test window are reported as ``nll``
+(negative ``LL``), ``tll`` and ``sll``, and compared to a homogeneous
+Poisson model fitted to the training period.
 
-Units: time in days, distances in km, rates per day and km².
+Units: distances in km, time in days, rates per km² and day.
 """
 import json
 import logging
@@ -384,9 +385,9 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
         return int_lambda_star
 
     def lambd(self):
-        """Conditional intensity $\\lambda^*(t_i, x_i)$ (per day and
-        km²) at the occurrence time $t_i$ and location $x_i$ of each event
-        $e_i$ in the test window; zero elsewhere.
+        """Conditional intensity $\\lambda^*(x_i, y_i, t_i)$ (per km² and
+        day) at the location $(x_i, y_i)$ and occurrence time $t_i$ of each
+        event $e_i$ in the test window; zero elsewhere.
 
         Note: `evaluate` replaces this method by its result array.
         """
@@ -434,7 +435,7 @@ class ETASLikelihoodCalculation(ETASParameterCalculation):
     # --- scores ------------------------------------------------------------
 
     def find_poisson_mle(self):
-        """Rate (per day and km²) of a homogeneous Poisson model fitted to
+        """Rate (per km² and day) of a homogeneous Poisson model fitted to
         the training period ``[auxiliary_start, timewindow_end]``."""
         aux_start = self.auxiliary_start.to_numpy()
         tw_end = self.timewindow_end.to_numpy()

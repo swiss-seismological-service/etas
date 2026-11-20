@@ -3,7 +3,8 @@
 A Python implementation of the **Epidemic-Type Aftershock Sequence (ETAS)**
 model for earthquake catalogs:
 
-- **parameter inversion** with the expectation-maximization algorithm,
+- **parameter inversion** with the expectation-maximization algorithm
+  (Veen and Schoenberg, 2008),
   including time- and space-varying completeness, ETAS-positive
   (`mc = "positive"`), fixed parameters, free background and free
   productivity (flETAS);
@@ -51,6 +52,12 @@ article(s):
   Mizrahi, L., Nandan, S., & Wiemer, S. (2021). Embracing Data
   Incompleteness for Better Earthquake Forecasting. *Journal of Geophysical
   Research: Solid Earth*, Section 3.1. <https://doi.org/10.1029/2021JB022379>
+
+The parameter inversion uses the expectation-maximization algorithm for
+ETAS models of Veen, A., & Schoenberg, F. P. (2008). Estimation of
+Space-Time Branching Process Models in Seismology Using an EM-Type
+Algorithm. *Journal of the American Statistical Association*, 103(482),
+614-624. <https://doi.org/10.1198/016214508000000148>
 
 For Probabilistic, Epidemic-Type Aftershock Incompleteness, see
 [PETAI](https://github.com/lmizrahi/petai).

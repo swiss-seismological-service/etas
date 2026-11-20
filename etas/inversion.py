@@ -2,44 +2,53 @@
 # -*- coding: utf-8 -*-
 r"""Inversion of ETAS parameters with the expectation-maximization algorithm.
 
-As described by Mizrahi et al. (2021), The Effect of Declustering on the
-Size Distribution of Mainshocks, Seismological Research Letters,
-https://doi.org/10.1785/0220200231, and, for time- and space-varying
-completeness, by Mizrahi et al. (2021), Embracing Data Incompleteness for
-Better Earthquake Forecasting, JGR Solid Earth, Section 3.1,
-https://doi.org/10.1029/2021JB022379.
+The EM algorithm for ETAS models was introduced by Veen and Schoenberg
+(2008), Estimation of Space-Time Branching Process Models in Seismology
+Using an EM-Type Algorithm, Journal of the American Statistical
+Association, https://doi.org/10.1198/016214508000000148. This
+implementation is described by Mizrahi et al. (2021), The Effect of
+Declustering on the Size Distribution of Mainshocks, Seismological Research
+Letters, https://doi.org/10.1785/0220200231, and, for time- and
+space-varying completeness, by Mizrahi et al. (2021), Embracing Data
+Incompleteness for Better Earthquake Forecasting, JGR Solid Earth,
+Section 3.1, https://doi.org/10.1029/2021JB022379.
 
 The model
 ---------
 A catalog consists of events $e_1, \dots, e_N$; event $e_i$ has the
-occurrence time $t_i$ (days), the location $x_i$ (latitude, longitude) and
-the magnitude $m_i$. The conditional intensity, that is, the expected
-number of events per day and km² at time $t$ and location $x$, given the
-events before $t$, is
+location $(x_i, y_i)$ (latitude, longitude), the occurrence time $t_i$
+(days) and the magnitude $m_i$. The conditional intensity, that is, the
+expected number of events per km² and day at location $(x, y)$ and time
+$t$, given the events before $t$, is
 
 $$
-\lambda(t, x) = \mu + \sum_{i: t_i < t} g(m_i, t - t_i, r_i^2(x)),
+\lambda(x, y, t) = \mu + \sum_{i: t_i < t} g(m_i, r_i(x, y), t - t_i),
 $$
 
-where $\mu$ is the background rate (per day and km²), the sum goes over all
-events $e_i$ before $t$, and $r_i(x)$ is the distance (km) between $x_i$ and
-$x$. The triggering kernel $g$ is the rate of direct aftershocks of an event
-of magnitude $m$, at a time delay $t$ (days) and a distance $r$ (km),
+where $\mu$ is the background rate (per km² and day), the sum goes over all
+events $e_i$ before $t$, and $r_i(x, y)$ is the distance (km) between
+$(x_i, y_i)$ and $(x, y)$. The triggering kernel $g$ is the rate of direct
+aftershocks of an event of magnitude $m$, at a distance $r$ (km) and a time
+delay $\Delta t$ (days),
 
 $$
-g(m, t, r^2) = k_0 \, e^{a (m - m_c)}
-    \cdot \frac{e^{-t / \tau}}{(t + c)^{1 + \omega}}
-    \cdot \frac{1}{(r^2 + d \, e^{\gamma (m - m_c)})^{1 + \rho}},
+g(m, r, \Delta t) = k_0 \, e^{a (m - m_{\mathrm{ref}})}
+    \cdot \frac{1}{(r^2 + d \, e^{\gamma (m - m_{\mathrm{ref}})})^{1 + \rho}}
+    \cdot \frac{e^{-\Delta t / \tau}}{(\Delta t + c)^{1 + \omega}},
 $$
 
-where $m_c$ is the reference magnitude (``m_ref - delta_m / 2``); $k_0$
-and $a$ set the number of aftershocks and its increase with magnitude; $c$
-(days), $\omega$ and $\tau$ (days) are the offset, exponent and taper time
-of the Omori-Utsu law; and $d$ (km²), $\gamma$ and $\rho$ are the size of
-the aftershock zone of an event of magnitude $m_c$, its increase with
-magnitude, and the decay of the rate with distance. Magnitudes at or above
-$m_c$ follow the Gutenberg-Richter law with parameter $\beta = b \ln 10$,
-where $b$ is the b-value. The documentation page "The model" explains each
+where $m_{\mathrm{ref}}$ is the reference magnitude, the lower edge of the
+lowest magnitude bin (``m_ref - delta_m / 2`` in the code); $k_0$ and $a$
+set the number of aftershocks and its increase with magnitude; $d$ (km²),
+$\gamma$ and $\rho$ are the size of the aftershock zone of an event of
+magnitude $m_{\mathrm{ref}}$, its increase with magnitude, and the decay of
+the rate with distance; and $c$ (days), $\omega$ and $\tau$ (days) are the
+offset, exponent and taper time of the Omori-Utsu law. Magnitudes at or
+above $m_{\mathrm{ref}}$ follow the Gutenberg-Richter law with parameter
+$\beta = b \ln 10$, where $b$ is the b-value. With a constant completeness
+magnitude $m_c$, $m_{\mathrm{ref}} = m_c$; with varying completeness
+(``mc = "var"`` or ``"positive"``), $m_{\mathrm{ref}}$ is at most the
+smallest completeness. The documentation page "The model" explains each
 term with example values. For 3D catalogs, distances are in units of
 ``space_unit_in_meters`` instead of km.
 
@@ -1722,12 +1731,15 @@ class ETASParameterCalculation:
 
     def invert(self):
         """Estimate the ETAS parameters with the expectation-maximization
-        algorithm.
+        algorithm (Veen and Schoenberg, 2008; Mizrahi et al., 2021).
 
-        Alternates between the expectation step (the probabilities
+        Starts from an initial guess of the parameters (``theta_0``, random
+        if not given) and alternates between two steps. The expectation
+        step calculates, given the current parameters, the probabilities
         $p_{ij}$ that event $e_j$ was triggered by event $e_i$, and the
-        expected number of background events) and the maximization step
-        (parameters given those probabilities), until the parameters
+        expected number of background events. The maximization step
+        updates the parameters to maximize the likelihood of this
+        branching structure. This is repeated until the parameters
         change by less than ``CONVERGENCE_TOLERANCE`` (see
         `_convergence_difference`) or ``max_iterations`` is reached.
         Requires `prepare`.
@@ -2459,12 +2471,13 @@ class ETASParameterCalculation:
         $$
 
         where $g_{ij}$ is the triggering kernel evaluated for the magnitude
-        of $e_i$, the time between $e_i$ and $e_j$ and their distance (column
-        ``gij``); $\mu_j$ is the background rate at $e_j$ (constant, or per
-        event with ``free_background``, plus the ``bg_term`` contribution if
-        used); the sum goes over all possible sources $e_k$ of $e_j$; and
-        $1 + \xi_k$ is the `responsibility_factor` of $e_k$, which accounts
-        for triggering by undetected events (1 for a constant completeness).
+        of $e_i$, the distance between $e_i$ and $e_j$ and the time between
+        them (column ``gij``); $\mu_j$ is the background rate at $e_j$
+        (constant, or per event with ``free_background``, plus the
+        ``bg_term`` contribution if used); the sum goes over all possible
+        sources $e_k$ of $e_j$; and $1 + \xi_k$ is the
+        `responsibility_factor` of $e_k$, which accounts for triggering by
+        undetected events (1 for a constant completeness).
         The denominator is the total rate at $e_j$ (column ``tot_rates``).
         Summing $p_{ij}$ over all sources $e_i$ gives the probability that
         $e_j$ was triggered (``P_triggered``); summing over all targets $e_j$,

@@ -97,6 +97,14 @@ Mizrahi, L., Nandan, S., & Wiemer, S. (2021). Embracing Data Incompleteness
 for Better Earthquake Forecasting (Section 3.1). *Journal of Geophysical
 Research: Solid Earth*. https://doi.org/10.1029/2021JB022379
 
+The parameter inversion uses the expectation-maximization algorithm for
+ETAS models of:
+
+Veen, A., & Schoenberg, F. P. (2008). Estimation of Space-Time Branching
+Process Models in Seismology Using an EM-Type Algorithm. *Journal of the
+American Statistical Association*, 103(482), 614-624.
+https://doi.org/10.1198/016214508000000148
+
 To cite the code, please use its
 [DOI](https://zenodo.org/badge/latestdoi/341629005), and cite the relevant
 article(s). For Probabilistic, Epidemic-Type Aftershock Incompleteness, see
